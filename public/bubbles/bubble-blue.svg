@@ -1,0 +1,14 @@
+<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="50" cy="50" r="50" fill="url(#blue_g1)"/>
+<circle cx="50" cy="50" r="50" fill="url(#blue_g2)"/>
+<defs>
+<radialGradient id="blue_g1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(50 50) rotate(90) scale(50 50)">
+<stop offset="0.783654" stop-color="#BFE7FB"/>
+<stop offset="1" stop-color="#279DD9"/>
+</radialGradient>
+<radialGradient id="blue_g2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(50 50) rotate(90) scale(50 50)">
+<stop offset="0.524038" stop-color="#BFE7FB" stop-opacity="0"/>
+<stop offset="1" stop-color="#279DD9"/>
+</radialGradient>
+</defs>
+</svg>

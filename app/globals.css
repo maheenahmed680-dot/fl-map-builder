@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
@@ -8,8 +9,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Open Sans", Arial, Helvetica, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -22,5 +23,109 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Open Sans", Arial, Helvetica, sans-serif;
 }
+
+/* Hide SVG legend in preview */
+#legend {
+  display: none !important;
+}
+
+.opm-viewport{
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  border-radius: 16px;
+}
+
+.opm-viewport:active{ cursor: grabbing; }
+
+.opm-stage{
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.opm-svg svg{ display: block; }
+
+/* Zoom controls – pill */
+.zoom-pill{
+  /* Auto layout */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 4px;
+  gap: 4px;
+
+  position: absolute;
+  width: 48px;
+  height: 92px;
+
+  /* Place it like the reference (right side, vertically centered-ish) */
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+
+  background: #F6F6F6;
+  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+  border-radius: 50px;
+
+  z-index: 30;
+}
+
+.zoom-btn{
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+
+  display: grid;
+  place-items: center;
+
+  cursor: pointer;
+}
+
+.zoom-btn:hover{
+  background: rgba(0,0,0,0.05);
+}
+
+.zoom-btn:active{
+  transform: scale(0.98);
+}
+
+.zoom-icon{
+  width: 24px;
+  height: 24px;
+  display: block;
+  pointer-events: none;
+}
+.opm-zoom{
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 20;
+}
+
+.opm-zoom button{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.opm-zoom button:active{ transform: scale(0.98); }
