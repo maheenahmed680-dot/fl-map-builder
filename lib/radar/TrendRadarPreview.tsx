@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type TrendRadarPreviewProps = {
   onSelectBubble: (bubbleId: string | null) => void;
@@ -18,14 +18,36 @@ export function TrendRadarPreview({
   warnings,
 }: TrendRadarPreviewProps) {
   const [zoom, setZoom] = useState(1);
+  const [translateX, setTranslateX] = useState(0);
+  const [translateY, setTranslateY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const dragStartRef = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  const isDraggingRef = useRef(false);
+  const suppressClickRef = useRef(false);
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
   useEffect(() => {
-    setZoom(1);
+    const frame = window.requestAnimationFrame(() => {
+      setZoom(1);
+      setTranslateX(0);
+      setTranslateY(0);
+      setIsDragging(false);
+      isDraggingRef.current = false;
+      suppressClickRef.current = false;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [svgMarkup]);
 
   function handleClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (suppressClickRef.current) {
+      event.preventDefault();
+      suppressClickRef.current = false;
+      return;
+    }
+
     const target = event.target as Element | null;
     const bubble = target?.closest("[data-bubble-id]");
     const bubbleId = bubble?.getAttribute("data-bubble-id") ?? null;
@@ -42,6 +64,44 @@ export function TrendRadarPreview({
 
   function handleZoomReset() {
     setZoom(1);
+    setTranslateX(0);
+    setTranslateY(0);
+  }
+
+  function handleMouseDown(event: React.MouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    suppressClickRef.current = false;
+    dragStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      tx: translateX,
+      ty: translateY,
+    };
+    isDraggingRef.current = true;
+    setIsDragging(true);
+  }
+
+  function handleMouseMove(event: React.MouseEvent<HTMLDivElement>) {
+    if (!isDraggingRef.current) return;
+    event.preventDefault();
+
+    const deltaX = event.clientX - dragStartRef.current.x;
+    const deltaY = event.clientY - dragStartRef.current.y;
+
+    if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+      suppressClickRef.current = true;
+    }
+
+    setTranslateX(dragStartRef.current.tx + deltaX);
+    setTranslateY(dragStartRef.current.ty + deltaY);
+  }
+
+  function endDragging(event?: React.MouseEvent<HTMLDivElement>) {
+    if (!isDraggingRef.current) return;
+    event?.preventDefault();
+    isDraggingRef.current = false;
+    setIsDragging(false);
   }
 
   return (
@@ -60,8 +120,15 @@ export function TrendRadarPreview({
 
       <div className="rounded-[28px] bg-[#f4f4f4] p-3">
         <div
-          className="trend-radar-preview trend-preview-scroll h-[72vh] overflow-y-auto overflow-x-hidden rounded-[24px] bg-[#ffffff]"
+          className={`trend-radar-preview trend-preview-scroll h-[72vh] overflow-hidden rounded-[24px] bg-[#ffffff] ${
+            isDragging ? "is-dragging" : ""
+          }`}
           onClick={handleClick}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={endDragging}
+          onMouseLeave={endDragging}
+          onDragStart={(event) => event.preventDefault()}
         >
           <style>{`
             .trend-preview-scroll{
@@ -72,14 +139,22 @@ export function TrendRadarPreview({
               justify-content:center;
               align-items:flex-start;
               position:relative;
+              user-select:none;
+              cursor:grab;
+            }
+            .trend-preview-scroll.is-dragging{
+              cursor:grabbing;
             }
             .trend-radar-preview .trend-radar-stage{
               display:flex;
               justify-content:center;
               width:100%;
+              min-height:100%;
+              overflow:hidden;
             }
             .trend-preview-zoom{
               display:inline-block;
+              will-change:transform;
             }
             .trend-preview-svg{
               width:100%;
@@ -126,15 +201,30 @@ export function TrendRadarPreview({
           {svgMarkup ? (
             <>
               <div className="trend-preview-zoomControls">
-                <button type="button" onClick={(event) => { event.stopPropagation(); handleZoomIn(); }} aria-label="Zoom in">
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); handleZoomIn(); }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  aria-label="Zoom in"
+                >
                   <svg className="zoom-icon" viewBox="0 0 24 24">
   <path d="/Users/apple/Desktop/fl-map-builder/public/zoom-plus.svg" fill="currentColor"/>
 </svg>
                 </button>
-                <button type="button" onClick={(event) => { event.stopPropagation(); handleZoomOut(); }} aria-label="Zoom out">
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); handleZoomOut(); }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  aria-label="Zoom out"
+                >
                   <img src="/zoom-minus.svg" alt="" />
                 </button>
-                <button type="button" onClick={(event) => { event.stopPropagation(); handleZoomReset(); }} aria-label="Reset zoom">
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); handleZoomReset(); }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  aria-label="Reset zoom"
+                >
                   <span className="text-lg leading-none text-[#222]">↺</span>
                 </button>
               </div>
@@ -142,7 +232,10 @@ export function TrendRadarPreview({
               <div className="trend-radar-stage">
                 <div
                   className="trend-preview-zoom"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+                  style={{
+                    transform: `translate(${translateX}px, ${translateY}px) scale(${zoom})`,
+                    transformOrigin: "top center",
+                  }}
                 >
                   <div className="trend-preview-svg" dangerouslySetInnerHTML={{ __html: svgMarkup }} />
                 </div>
