@@ -5,17 +5,20 @@ import { TrendRadarPreview } from "@/lib/radar/TrendRadarPreview";
 import { TrendRadarSidebar } from "@/lib/radar/TrendRadarSidebar";
 import {
   bubbleAssetUrls,
-  bubbleBucketTypeMap,
   type BubbleAssetMap,
   type BubbleOverride,
   type BubbleType,
 } from "@/lib/radar/radarConfig";
 import { transformTrendRadarHtmlToStyledSvg } from "@/lib/radar/transformTrendRadarHtml";
 
+type BubbleSelectionKey = string;
+
 type BubbleMeta = {
-  id: string;
+  id: BubbleSelectionKey;
+  clusterId: string | null;
+  trend: string | null;
   label: string;
-  type: BubbleType;
+  type: BubbleType | "";
 };
 
 const emptyAssets: BubbleAssetMap = {
@@ -25,17 +28,78 @@ const emptyAssets: BubbleAssetMap = {
   "Sehr niedrig": "",
 };
 
+const bubbleTypeByBucket: Record<string, BubbleType> = {
+  "4": "Sehr hoch",
+  "3": "Hoch",
+  "2": "Niedrig",
+  "1": "Sehr niedrig",
+};
+
+function normalizeSvgValue(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function toBubbleSelectionKey(clusterId: string | null, trend: string | null): BubbleSelectionKey | null {
+  if (clusterId) return `cluster:${clusterId}`;
+  if (trend) return `trend:${trend}`;
+  return null;
+}
+
+function normalizeBubbleType(value: string | null | undefined): BubbleType | null {
+  const normalized = normalizeSvgValue(value);
+  if (!normalized) return null;
+
+  return normalized === "Sehr hoch" ||
+    normalized === "Hoch" ||
+    normalized === "Niedrig" ||
+    normalized === "Sehr niedrig"
+    ? normalized
+    : null;
+}
+
+function getBubbleTypeFromBucket(bucket: string | null | undefined): BubbleType | null {
+  const normalizedBucket = normalizeSvgValue(bucket);
+  return normalizedBucket ? bubbleTypeByBucket[normalizedBucket] ?? null : null;
+}
+
+function escapeAttributeValue(value: string) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+function findBubbleLabelNodeByClusterId(svg: SVGSVGElement, clusterId: string | null) {
+  const labelsGroup = svg.querySelector("#radar-labels-outer");
+  if (!labelsGroup || !clusterId) return null;
+
+  return labelsGroup.querySelector<SVGTextElement>(
+    `text[data-cluster-id="${escapeAttributeValue(clusterId)}"]`,
+  );
+}
+
+function findBubbleLabelNodeByTrend(svg: SVGSVGElement, trend: string | null) {
+  const labelsGroup = svg.querySelector("#radar-labels-outer");
+  if (!labelsGroup || !trend) return null;
+
+  return labelsGroup.querySelector<SVGTextElement>(
+    `text[data-trend="${escapeAttributeValue(trend)}"]`,
+  );
+}
+
 export function TrendRadarWorkspace() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bubbleAssets, setBubbleAssets] = useState<BubbleAssetMap>(emptyAssets);
   const [logoAsset, setLogoAsset] = useState("");
   const [rawHtml, setRawHtml] = useState("");
   const [fileName, setFileName] = useState("");
-  const [svgMarkup, setSvgMarkup] = useState("");
+  const [baseSvgMarkup, setBaseSvgMarkup] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [bubbles, setBubbles] = useState<Record<string, BubbleMeta>>({});
-  const [selectedBubbleId, setSelectedBubbleId] = useState<string | null>(null);
-  const [overrides, setOverrides] = useState<Record<string, BubbleOverride>>({});
+  const [baseBubbleIndexByKey, setBaseBubbleIndexByKey] = useState<Record<BubbleSelectionKey, BubbleMeta>>({});
+  const [selectedBubbleKey, setSelectedBubbleKey] = useState<BubbleSelectionKey | null>(null);
+  const [bubbleOverridesByKey, setBubbleOverridesByKey] = useState<Record<BubbleSelectionKey, BubbleOverride>>({});
 
   useEffect(() => {
     let active = true;
@@ -81,36 +145,22 @@ export function TrendRadarWorkspace() {
 
     async function runTransform() {
       if (!rawHtml.trim()) {
-        setSvgMarkup("");
+        setBaseSvgMarkup("");
         setWarnings([]);
-        setBubbles({});
-        setSelectedBubbleId(null);
+        setBaseBubbleIndexByKey({});
+        setSelectedBubbleKey(null);
         return;
       }
 
       const result = await transformTrendRadarHtmlToStyledSvg(rawHtml, {
         bubbleAssets,
         logoAsset,
-        overrides,
-        selectedBubbleId,
       });
 
       if (!active) return;
 
-      setSvgMarkup(result.svg);
+      setBaseSvgMarkup(result.svg);
       setWarnings(result.warnings);
-
-      const nextBubbles = result.bubbles.reduce<Record<string, BubbleMeta>>((acc, bubble) => {
-        acc[bubble.id] = bubble;
-        return acc;
-      }, {});
-
-      setBubbles(nextBubbles);
-
-      if (selectedBubbleId && nextBubbles[selectedBubbleId]) return;
-
-      const firstBubbleId = result.bubbles[0]?.id ?? null;
-      setSelectedBubbleId(firstBubbleId);
     }
 
     void runTransform();
@@ -118,36 +168,112 @@ export function TrendRadarWorkspace() {
     return () => {
       active = false;
     };
-  }, [bubbleAssets, logoAsset, overrides, rawHtml, selectedBubbleId]);
+  }, [bubbleAssets, logoAsset, rawHtml]);
+
+  useEffect(() => {
+    if (!baseSvgMarkup.trim()) {
+      setBaseBubbleIndexByKey({});
+      return;
+    }
+
+    const parsed = new DOMParser().parseFromString(baseSvgMarkup, "image/svg+xml");
+    const svg =
+      parsed.documentElement?.tagName.toLowerCase() === "svg"
+        ? (parsed.documentElement as SVGSVGElement)
+        : parsed.querySelector("svg");
+
+    if (!svg) {
+      setBaseBubbleIndexByKey({});
+      return;
+    }
+
+    const nextBubbleIndexByKey: Record<BubbleSelectionKey, BubbleMeta> = {};
+    svg.querySelectorAll<SVGElement>("circle.bubble, image.bubble").forEach((bubbleNode) => {
+      const clusterId = normalizeSvgValue(bubbleNode.getAttribute("data-cluster-id"));
+      const trend = normalizeSvgValue(bubbleNode.getAttribute("data-trend"));
+      const selectionKey = toBubbleSelectionKey(clusterId, trend);
+      if (!selectionKey) return;
+
+      const currentBubble = nextBubbleIndexByKey[selectionKey];
+      const labelByClusterId = findBubbleLabelNodeByClusterId(svg, clusterId);
+      const labelByTrend = findBubbleLabelNodeByTrend(svg, trend);
+      const label =
+        normalizeSvgValue(labelByClusterId?.textContent) ??
+        normalizeSvgValue(labelByTrend?.textContent) ??
+        trend ??
+        currentBubble?.label ??
+        "";
+      const typeFromData = normalizeBubbleType(bubbleNode.getAttribute("data-bubble-type"));
+      const typeFromBucket = getBubbleTypeFromBucket(bubbleNode.getAttribute("data-bucket"));
+
+      nextBubbleIndexByKey[selectionKey] = {
+        id: selectionKey,
+        clusterId: clusterId ?? currentBubble?.clusterId ?? null,
+        trend: trend ?? currentBubble?.trend ?? null,
+        label,
+        type: typeFromData ?? typeFromBucket ?? currentBubble?.type ?? "",
+      };
+    });
+
+    svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text").forEach((labelNode) => {
+      const clusterId = normalizeSvgValue(labelNode.getAttribute("data-cluster-id"));
+      const trend = normalizeSvgValue(labelNode.getAttribute("data-trend"));
+      const selectionKey = toBubbleSelectionKey(clusterId, trend);
+      if (!selectionKey) return;
+
+      const currentBubble = nextBubbleIndexByKey[selectionKey];
+      const label = normalizeSvgValue(labelNode.textContent) ?? trend ?? currentBubble?.label ?? "";
+
+      nextBubbleIndexByKey[selectionKey] = {
+        id: selectionKey,
+        clusterId: clusterId ?? currentBubble?.clusterId ?? null,
+        trend: trend ?? currentBubble?.trend ?? null,
+        label,
+        type: currentBubble?.type ?? "",
+      };
+    });
+
+    setBaseBubbleIndexByKey(nextBubbleIndexByKey);
+  }, [baseSvgMarkup]);
 
   async function handleUploadFile(file: File | null) {
     if (!file) return;
     const text = await file.text();
     setFileName(file.name);
     setRawHtml(text);
-    setOverrides({});
-    setSelectedBubbleId(null);
+    setBubbleOverridesByKey({});
+    setSelectedBubbleKey(null);
   }
 
-  const selectedBubble = selectedBubbleId ? bubbles[selectedBubbleId] ?? null : null;
+  const selectedBubbleBase = selectedBubbleKey ? baseBubbleIndexByKey[selectedBubbleKey] ?? null : null;
+  const selectedBubbleOverride = selectedBubbleKey ? bubbleOverridesByKey[selectedBubbleKey] ?? null : null;
+  const selectedBubbleLabelFallback =
+    selectedBubbleKey?.startsWith("trend:") ? selectedBubbleKey.slice("trend:".length) : "";
+  const selectedBubble = selectedBubbleKey
+    ? {
+        id: selectedBubbleKey,
+        label: selectedBubbleOverride?.label ?? selectedBubbleBase?.label ?? selectedBubbleLabelFallback,
+        type: selectedBubbleOverride?.type ?? selectedBubbleBase?.type ?? "",
+      }
+    : null;
 
   function handleBubbleLabelChange(label: string) {
-    if (!selectedBubbleId) return;
-    setOverrides((current) => ({
+    if (!selectedBubbleKey) return;
+    setBubbleOverridesByKey((current) => ({
       ...current,
-      [selectedBubbleId]: {
-        ...current[selectedBubbleId],
+      [selectedBubbleKey]: {
+        ...current[selectedBubbleKey],
         label,
       },
     }));
   }
 
   function handleBubbleTypeChange(type: BubbleType) {
-    if (!selectedBubbleId) return;
-    setOverrides((current) => ({
+    if (!selectedBubbleKey) return;
+    setBubbleOverridesByKey((current) => ({
       ...current,
-      [selectedBubbleId]: {
-        ...current[selectedBubbleId],
+      [selectedBubbleKey]: {
+        ...current[selectedBubbleKey],
         type,
       },
     }));
@@ -157,24 +283,24 @@ export function TrendRadarWorkspace() {
     <div
       className={
         sidebarOpen
-          ? "grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_420px]"
-          : "grid grid-cols-1 gap-6"
+          ? "grid min-h-[780px] grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_435px] xl:gap-0"
+          : "grid min-h-[780px] grid-cols-1 gap-4"
       }
     >
       <TrendRadarPreview
-        onSelectBubble={setSelectedBubbleId}
+        onBubbleSelect={setSelectedBubbleKey}
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
+        selectedBubbleKey={selectedBubbleKey}
         sidebarOpen={sidebarOpen}
-        svgMarkup={svgMarkup}
+        svgMarkup={baseSvgMarkup}
         warnings={warnings}
       />
 
       {sidebarOpen && (
         <TrendRadarSidebar
-          bubbleLabel={selectedBubble?.label ?? ""}
-          bubbleType={selectedBubble?.type ?? bubbleBucketTypeMap["2"]}
+          bubbleEditorDisabled={!selectedBubble}
           fileName={fileName}
-          hasSelection={Boolean(selectedBubble)}
+          selectedBubble={selectedBubble}
           onBubbleLabelChange={handleBubbleLabelChange}
           onBubbleTypeChange={handleBubbleTypeChange}
           onHidePanel={() => setSidebarOpen(false)}

@@ -1794,5 +1794,19 @@ const ny2 = cy + dy * effectiveR;
   drawStraightBubbleLabelConnectors($, svgEl, meta, normalizedBubbles);
   normalizeRadarLayerOrder($, svgEl);
 
+  // remove PWLG compass labels
+  const unwanted = new Set(["P", "W", "G", "L"]);
+
+  svgEl.find("text").each((_, el) => {
+    const t = $(el).text().trim();
+
+    if (unwanted.has(t)) {
+      console.log("Removing PWLG label:", t);
+      $(el).remove();
+    }
+  });
+
+  console.log("PWLG cleanup complete");
+
   return { svg: $.xml(svgEl), bubbles: collectBubbleOutput($, svgEl), warnings };
 }
