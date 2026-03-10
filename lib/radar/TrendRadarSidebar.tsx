@@ -12,6 +12,7 @@ type TrendRadarSidebarProps = {
   } | null;
   onBubbleLabelChange: (value: string) => void;
   onBubbleTypeChange: (value: BubbleType) => void;
+  onDownloadSvg: () => void;
   onHidePanel: () => void;
   onUploadFile: (file: File | null) => void;
 };
@@ -22,6 +23,7 @@ export function TrendRadarSidebar({
   selectedBubble,
   onBubbleLabelChange,
   onBubbleTypeChange,
+  onDownloadSvg,
   onHidePanel,
   onUploadFile,
 }: TrendRadarSidebarProps) {
@@ -130,6 +132,7 @@ export function TrendRadarSidebar({
       <div className="mt-10 flex flex-wrap gap-2">
         <button
           type="button"
+          onClick={onDownloadSvg}
           className="inline-flex items-center justify-center rounded-full bg-[#222222] px-4 py-3 text-[14px] text-white"
           style={displayFont}
         >

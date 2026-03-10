@@ -89,6 +89,108 @@ function findBubbleLabelNodeByTrend(svg: SVGSVGElement, trend: string | null) {
   );
 }
 
+function getSvgDownloadFileName(fileName: string) {
+  const normalized = fileName.trim();
+  if (!normalized) return "trend-radar.svg";
+
+  const baseName = normalized.replace(/\.[^/.]+$/, "");
+  return `${baseName || "trend-radar"}.svg`;
+}
+
+function getPreviewSvgElement() {
+  return document.querySelector(".trend-preview-svg svg") as SVGSVGElement | null;
+}
+
+function getFallbackSvgElement(svgMarkup: string) {
+  if (!svgMarkup.trim()) return null;
+
+  const parsed = new DOMParser().parseFromString(svgMarkup, "text/html");
+  return parsed.querySelector("svg") as SVGSVGElement | null;
+}
+
+type SvgExportStats = {
+  hrefRootRelativeCount: number;
+  xlinkHrefRootRelativeCount: number;
+  radarBubblePathCount: number;
+  outerLabelCount: number;
+  viewBox: string | null;
+};
+
+function isRootRelativeAssetPath(value: string | null | undefined) {
+  return Boolean(value?.trim().startsWith("/"));
+}
+
+async function assetPathToDataUrl(assetPath: string, cache: Map<string, string>) {
+  const cached = cache.get(assetPath);
+  if (cached) return cached;
+
+  const response = await fetch(new URL(assetPath, window.location.origin).toString());
+  if (!response.ok) {
+    throw new Error(`Failed to fetch SVG asset for export: ${assetPath} (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const mimeType =
+    blob.type || (assetPath.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "application/octet-stream");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  const dataUrl = `data:${mimeType};base64,${btoa(binary)}`;
+  cache.set(assetPath, dataUrl);
+  return dataUrl;
+}
+
+async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
+  const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
+  svgClone.querySelectorAll("parsererror").forEach((node) => node.remove());
+
+  svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+  const assetCache = new Map<string, string>();
+  for (const image of Array.from(svgClone.querySelectorAll("image"))) {
+    const href = image.getAttribute("href")?.trim() ?? null;
+    const xlinkHref =
+      image.getAttribute("xlink:href")?.trim() ??
+      image.getAttributeNS("http://www.w3.org/1999/xlink", "href")?.trim() ??
+      null;
+    const assetPath = isRootRelativeAssetPath(href)
+      ? href
+      : isRootRelativeAssetPath(xlinkHref)
+      ? xlinkHref
+      : null;
+
+    if (!assetPath) continue;
+
+    const dataUrl = await assetPathToDataUrl(assetPath, assetCache);
+    image.setAttribute("href", dataUrl);
+    image.setAttribute("xlink:href", dataUrl);
+    image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", dataUrl);
+  }
+
+  const xml = new XMLSerializer().serializeToString(svgClone);
+  const stats: SvgExportStats = {
+    hrefRootRelativeCount: (xml.match(/\shref="\/[^"]*"/g) ?? []).length,
+    xlinkHrefRootRelativeCount: (xml.match(/\sxlink:href="\/[^"]*"/g) ?? []).length,
+    radarBubblePathCount: (xml.match(/\/radar-bubbles\//g) ?? []).length,
+    outerLabelCount: svgClone.querySelectorAll("#radar-labels-outer text").length,
+    viewBox: svgClone.getAttribute("viewBox"),
+  };
+
+  if (stats.hrefRootRelativeCount > 0 || stats.xlinkHrefRootRelativeCount > 0 || stats.radarBubblePathCount > 0) {
+    throw new Error(
+      `Standalone SVG export still contains root-relative assets: ${JSON.stringify(stats)}`,
+    );
+  }
+
+  return { xml, stats };
+}
+
 export function TrendRadarWorkspace() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bubbleAssets, setBubbleAssets] = useState<BubbleAssetMap>(emptyAssets);
@@ -279,6 +381,28 @@ export function TrendRadarWorkspace() {
     }));
   }
 
+  function handleDownloadSvg() {
+    void (async () => {
+      try {
+        const svg = getPreviewSvgElement() ?? getFallbackSvgElement(baseSvgMarkup);
+        if (!svg) return;
+
+        const { xml, stats } = await buildDownloadableSvgMarkup(svg);
+        console.info("Trend Radar SVG export verification", stats);
+
+        const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = getSvgDownloadFileName(fileName);
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      } catch (error) {
+        console.error("Trend Radar SVG export failed", error);
+      }
+    })();
+  }
+
   return (
     <div
       className={
@@ -303,6 +427,7 @@ export function TrendRadarWorkspace() {
           selectedBubble={selectedBubble}
           onBubbleLabelChange={handleBubbleLabelChange}
           onBubbleTypeChange={handleBubbleTypeChange}
+          onDownloadSvg={handleDownloadSvg}
           onHidePanel={() => setSidebarOpen(false)}
           onUploadFile={handleUploadFile}
         />
