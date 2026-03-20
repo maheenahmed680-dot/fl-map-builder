@@ -5,8 +5,6 @@ import { bubbleTypes, TREND_RADAR_UPLOAD_INPUT_ID, type BubbleType } from "@/lib
 type TrendRadarSidebarProps = {
   bubbleEditorDisabled: boolean;
   fileName: string;
-  pendingSlotAssignmentCount: number;
-  saveEditsNotice: string | null;
   selectedBubble: {
     id: string;
     label: string;
@@ -16,21 +14,17 @@ type TrendRadarSidebarProps = {
   onBubbleTypeChange: (value: BubbleType) => void;
   onDownloadSvg: () => void;
   onHidePanel: () => void;
-  onSaveEdits: () => void;
   onUploadFile: (file: File | null) => void;
 };
 
 export function TrendRadarSidebar({
   bubbleEditorDisabled,
   fileName,
-  pendingSlotAssignmentCount,
-  saveEditsNotice,
   selectedBubble,
   onBubbleLabelChange,
   onBubbleTypeChange,
   onDownloadSvg,
   onHidePanel,
-  onSaveEdits,
   onUploadFile,
 }: TrendRadarSidebarProps) {
   const displayFont = { fontFamily: "Montserrat, Open Sans, Arial, sans-serif" } as const;
@@ -135,51 +129,29 @@ export function TrendRadarSidebar({
         </div>
       </div>
 
-      <div className="mt-10 flex flex-col gap-3">
-        <div className="flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={onSaveEdits}
-            disabled={pendingSlotAssignmentCount === 0}
-            className="inline-flex items-center justify-center rounded-full border border-[rgba(192,124,17,0.28)] bg-[#fff4dd] px-4 py-3 text-[14px] text-[#7a4b00] disabled:cursor-not-allowed disabled:border-[rgba(34,34,34,0.12)] disabled:bg-[rgba(255,255,255,0.7)] disabled:text-[rgba(34,34,34,0.45)]"
-            style={displayFont}
-          >
-            Save edits
-          </button>
-          <div className="text-[12px] leading-[1.4] text-[rgba(34,34,34,0.6)]">
-            {pendingSlotAssignmentCount > 0
-              ? `${pendingSlotAssignmentCount} preview slot edit${pendingSlotAssignmentCount === 1 ? "" : "s"} pending.`
-              : "No preview slot edits pending."}
-          </div>
-          {saveEditsNotice && (
-            <div className="text-[12px] leading-[1.4] text-[#7a4b00]">{saveEditsNotice}</div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={onDownloadSvg}
-            className="inline-flex items-center justify-center rounded-full bg-[#222222] px-4 py-3 text-[14px] text-white"
-            style={displayFont}
-          >
-            Download SVG
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-full border border-[rgba(34,34,34,0.2)] bg-white px-4 py-3 text-[14px] text-[#222222]"
-            style={displayFont}
-          >
-            Download full html
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-full border border-[rgba(34,34,34,0.2)] bg-white px-4 py-3 text-[14px] text-[#222222]"
-            style={displayFont}
-          >
-            Download WP code
-          </button>
-        </div>
+      <div className="mt-10 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onDownloadSvg}
+          className="inline-flex items-center justify-center rounded-full bg-[#222222] px-4 py-3 text-[14px] text-white"
+          style={displayFont}
+        >
+          Download SVG
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center justify-center rounded-full border border-[rgba(34,34,34,0.2)] bg-white px-4 py-3 text-[14px] text-[#222222]"
+          style={displayFont}
+        >
+          Download full html
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center justify-center rounded-full border border-[rgba(34,34,34,0.2)] bg-white px-4 py-3 text-[14px] text-[#222222]"
+          style={displayFont}
+        >
+          Download WP code
+        </button>
       </div>
     </aside>
   );
