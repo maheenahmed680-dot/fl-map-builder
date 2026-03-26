@@ -719,86 +719,6 @@ function applyOuterLabelPosition(
   label.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
 }
 
-function getOuterLabelThetaBounds(theta: number) {
-  const angle = normalizeAngle(theta);
-  const pad = Math.PI / 180;
-
-  if (angle >= -Math.PI / 4 && angle < Math.PI / 4) {
-    return { min: -Math.PI / 4 + pad, max: Math.PI / 4 - pad };
-  }
-  if (angle >= Math.PI / 4 && angle < (3 * Math.PI) / 4) {
-    return { min: Math.PI / 4 + pad, max: (3 * Math.PI) / 4 - pad };
-  }
-  if (angle >= (-3 * Math.PI) / 4 && angle < -Math.PI / 4) {
-    return { min: (-3 * Math.PI) / 4 + pad, max: -Math.PI / 4 - pad };
-  }
-  if (angle >= (3 * Math.PI) / 4) {
-    return { min: (3 * Math.PI) / 4 + pad, max: Math.PI - pad };
-  }
-  return { min: -Math.PI + pad, max: (-3 * Math.PI) / 4 - pad };
-}
-
-
-function partitionDenseRuns<T extends { thetaLane: number }>(items: T[], minGap: number) {
-  const runs: T[][] = [];
-  let current: T[] = [];
-
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
-    if (current.length === 0) {
-      current.push(item);
-      continue;
-    }
-
-    const prev = current[current.length - 1];
-    if (item.thetaLane - prev.thetaLane < minGap) {
-      current.push(item);
-    } else {
-      runs.push(current);
-      current = [item];
-    }
-  }
-
-  if (current.length) runs.push(current);
-  return runs;
-}
-
-function redistributeRunEvenlyLocal<
-  T extends {
-    itemMin: number;
-    itemMax: number;
-    origLaneTheta: number;
-    thetaLane: number;
-  }
->(run: T[], minGap: number) {
-  if (run.length <= 1) return;
-
-  const firstOrig = run[0].origLaneTheta;
-  const lastOrig = run[run.length - 1].origLaneTheta;
-
-  let start = Math.max(run[0].itemMin, firstOrig);
-  let end = Math.min(run[run.length - 1].itemMax, lastOrig);
-
-  const neededSpan = minGap * (run.length - 1) * 1.12;
-
-  if (end - start < neededSpan) {
-    const center = (firstOrig + lastOrig) / 2;
-    start = Math.max(run[0].itemMin, center - neededSpan / 2);
-    end = Math.min(run[run.length - 1].itemMax, start + neededSpan);
-    start = Math.max(run[0].itemMin, end - neededSpan);
-  }
-
-  if (run.length === 2) {
-    run[0].thetaLane = start;
-    run[1].thetaLane = end;
-    return;
-  }
-
-  const step = (end - start) / (run.length - 1);
-  run.forEach((entry, index) => {
-    entry.thetaLane = Math.max(entry.itemMin, Math.min(entry.itemMax, start + step * index));
-  });
-}
 
 function appendOuterGreyRingLabels(
   $: CheerioAPI,
@@ -824,7 +744,7 @@ let R_start_safe = R_start + START_INSET;
 R_start_safe = Math.max(R_start_safe, R_tealOuter + 12 + BAND_PADDING);
 R_start_safe = Math.min(R_start_safe, BAND_OUTER - BAND_PADDING - 4);
 
-const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
+const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
 
   let R_label = (BAND_INNER + BAND_OUTER) / 2;
@@ -862,7 +782,13 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
   });
   // --- END NEW
 
-  const domBubbles = svg.find("circle.bubble:not(.bubble-hit)");
+  // ── Tunable constant: approximate px width per character at 10px font ──
+  const CHAR_WIDTH_PX = 7;
+  const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
+  const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
+
+  // ── Collect bubbles and compute initial angles ──
+  const domBubbles = svg.find("circle.bubble:not(.bubble-hit), circle.trend-bubble:not(.bubble-hit), circle[data-trend]:not(.bubble-hit)");
   const items = (domBubbles.length > 0
     ? domBubbles.toArray().map((node) => {
         const bubble = $(node);
@@ -880,35 +806,25 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
             ? (toNum(bubble.attr("y")) ?? 0) + (toNum(bubble.attr("height")) ?? 0) / 2
             : toNum(bubble.attr("cy"));
         const label = (bubble.attr("data-trend") ?? siblingLabel).replace(/\s+/g, " ").trim();
-        const clusterId = (bubble.attr("data-cluster-id") ?? "").trim();
+        const clusterId = (bubble.attr("data-cluster-id") ?? bubble.attr("data-cluster") ?? "").trim();
         const trendKey = (bubble.attr("data-trend") ?? label).replace(/\s+/g, " ").trim();
 
         if (bx == null || by == null || !label) return null;
 
         const thetaRaw = Math.atan2(by - cy, bx - cx);
-        return {
-          label,
-          theta: normalizeAngle(thetaRaw),
-          origTheta: normalizeAngle(thetaRaw),
-          bounds: getOuterLabelThetaBounds(thetaRaw),
-          quad: getConnectorQuadrantInfo(thetaRaw).id,
-          clusterId,
-          trendKey,
-        };
+        return { label, theta: thetaRaw, origTheta: thetaRaw, clusterId, trendKey, halfWidth: 0 };
       })
     : normalizedBubbles.map((bubble) => {
         const label = (bubble.label ?? "").replace(/\s+/g, " ").trim();
         if (!label) return null;
         const thetaRaw = Math.atan2(bubble.cy - cy, bubble.cx - cx);
-
         return {
           label,
-          theta: normalizeAngle(thetaRaw),
-          origTheta: normalizeAngle(thetaRaw),
-          bounds: getOuterLabelThetaBounds(thetaRaw),
-          quad: getConnectorQuadrantInfo(thetaRaw).id,
+          theta: thetaRaw,
+          origTheta: thetaRaw,
           clusterId: (bubble.clusterId ?? "").trim(),
           trendKey: (bubble.label ?? "").replace(/\s+/g, " ").trim(),
+          halfWidth: 0,
         };
       }))
     .filter(
@@ -916,131 +832,100 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
         label: string;
         theta: number;
         origTheta: number;
-        bounds: { min: number; max: number };
-        quad: number;
         clusterId: string;
         trendKey: string;
+        halfWidth: number;
       } => Boolean(item),
-    )
-    .sort((left, right) => left.theta - right.theta);
+    );
 
   if (items.length === 0) return;
 
-    const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-  const toLaneTheta = (value: number, quad: number) =>
-    quad === 2 && value < 0 ? value + Math.PI * 2 : value;
-
-  const quadrantGroups = new Map<number, typeof items>();
+  // ── Estimate angular half-width for each label ──
+  // Labels are rotated as spokes (radially outward), so their angular footprint
+  // is determined by the FONT HEIGHT (not text length). Text length extends
+  // radially, not along the circumference.
+  const labelRadius = R_tealOuter + LABEL_OFFSET;
+  const FONT_HEIGHT_PX = 12; // 10px font + line spacing
+  const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
+  // Dynamic minimum gap: scales down when there are many labels so they can all fit
+  const MIN_ANGULAR_GAP = Math.max(
+    3 * (Math.PI / 180),                         // at least 3°
+    (Math.PI * 2 / items.length) * 0.6,          // 60% of even spacing
+  );
   items.forEach((item) => {
-    const existing = quadrantGroups.get(item.quad) ?? [];
-    existing.push(item);
-    quadrantGroups.set(item.quad, existing);
+    item.halfWidth = Math.max(baseAngularHalfWidth, MIN_ANGULAR_GAP / 2);
   });
 
-  quadrantGroups.forEach((group) => {
-    const quadInfo = getConnectorQuadrantInfo(group[0].origTheta);
+  // ── Convert to [0, 2π) and sort by angle ──
+  items.forEach((item) => {
+    item.theta = item.theta < 0 ? item.theta + Math.PI * 2 : item.theta;
+    item.origTheta = item.theta; // store in [0, 2π) form
+  });
+  items.sort((a, b) => a.theta - b.theta);
 
-    group.sort(
-      (left, right) =>
-        toLaneTheta(left.origTheta, left.quad) - toLaneTheta(right.origTheta, right.quad),
-    );
+  // ── Iterative push-apart relaxation ──
+  const TWO_PI = Math.PI * 2;
 
-    const laneItems = group
-      .map((item) => {
-        const itemMin = Math.max(toLaneTheta(item.bounds.min, item.quad), quadInfo.min);
-        const itemMax = Math.min(toLaneTheta(item.bounds.max, item.quad), quadInfo.max);
-        if (itemMin >= itemMax) return null;
+  const pushApart = (maxPasses: number) => {
+    for (let pass = 0; pass < maxPasses; pass++) {
+      let moved = false;
+      for (let i = 0; i < items.length; i++) {
+        const j = (i + 1) % items.length;
+        const a = items[i];
+        const b = items[j];
 
-        const origLaneTheta = toLaneTheta(item.origTheta, item.quad);
+        let gap = b.theta - a.theta;
+        if (j === 0) gap += TWO_PI; // wrap-around from last to first
 
-        return {
-          item,
-          itemMin,
-          itemMax,
-          origLaneTheta,
-          thetaLane: clamp(origLaneTheta, itemMin, itemMax),
-        };
-      })
-      .filter(
-        (entry): entry is {
-          item: (typeof group)[number];
-          itemMin: number;
-          itemMax: number;
-          origLaneTheta: number;
-          thetaLane: number;
-        } => Boolean(entry),
-      );
-
-    if (!laneItems.length) return;
-
-    const MIN_GAP = 32 / R_start_safe;
-
-    const runs: Array<typeof laneItems> = [];
-    let currentRun: typeof laneItems = [];
-
-    laneItems.forEach((entry, index) => {
-      if (currentRun.length === 0) {
-        currentRun.push(entry);
-        return;
+        const needed = a.halfWidth + b.halfWidth;
+        if (gap < needed) {
+          const overlap = needed - gap;
+          a.theta -= overlap / 2;
+          b.theta += overlap / 2;
+          moved = true;
+        }
       }
-
-      const prev = laneItems[index - 1];
-      const gap = entry.thetaLane - prev.thetaLane;
-
-      if (gap < MIN_GAP) {
-        currentRun.push(entry);
-      } else {
-        runs.push(currentRun);
-        currentRun = [entry];
-      }
-    });
-
-    if (currentRun.length) runs.push(currentRun);
-
-    runs.forEach((run) => {
-      if (run.length <= 1) return;
-
-      const runMin = Math.max(...run.map((entry, i) => entry.itemMin - i * MIN_GAP));
-      const runMax = Math.min(...run.map((entry, i) => entry.itemMax - i * MIN_GAP));
-
-      let start = run[0].origLaneTheta;
-      start = Math.max(runMin, Math.min(runMax, start));
-
-      run.forEach((entry, i) => {
-        entry.thetaLane = start + i * MIN_GAP;
+      // Re-normalize to [0, 2π) after each pass
+      items.forEach((item) => {
+        item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
       });
-    });
-    // Final rescue pass for near-identical theta pairs
-    laneItems.sort((a, b) => a.thetaLane - b.thetaLane);
-
-    const RESCUE_GAP = 26 / R_start_safe;
-
-    for (let i = 1; i < laneItems.length; i += 1) {
-      const prev = laneItems[i - 1];
-      const curr = laneItems[i];
-
-      if (curr.thetaLane - prev.thetaLane < RESCUE_GAP) {
-        const candidate = prev.thetaLane + RESCUE_GAP;
-
-        // stay inside quadrant bounds if possible
-        curr.thetaLane = Math.max(
-          curr.itemMin,
-          Math.min(curr.itemMax, candidate),
-        );
-      }
+      // Re-sort since items may have crossed
+      items.sort((a, b) => a.theta - b.theta);
+      if (!moved) break;
     }
-    laneItems.forEach((entry) => {
-      const theta =
-        entry.thetaLane > Math.PI ? entry.thetaLane - Math.PI * 2 : entry.thetaLane;
-      entry.item.theta = normalizeAngle(theta);
-    });
+  };
+
+  pushApart(50);
+
+  // ── Clamp: each label must stay within ±90° of its original bubble angle ──
+  items.forEach((item) => {
+    let delta = item.theta - item.origTheta;
+    // Wrap delta to [-π, π]
+    if (delta > Math.PI) delta -= TWO_PI;
+    if (delta < -Math.PI) delta += TWO_PI;
+
+    if (Math.abs(delta) > MAX_DRIFT) {
+      item.theta = item.origTheta + Math.sign(delta) * MAX_DRIFT;
+      item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
+    }
   });
 
+  // Second push-apart pass to fix overlaps re-introduced by clamping
+  items.sort((a, b) => a.theta - b.theta);
+  pushApart(20);
+
+  // ── Convert back to [-π, π] for rendering ──
+  items.forEach((item) => {
+    if (item.theta > Math.PI) item.theta -= TWO_PI;
+    item.theta = normalizeAngle(item.theta);
+  });
+
+  // ── Create SVG text elements ──
   const group = $('<g id="radar-labels-outer"></g>');
   items.forEach((item) => {
-    const theta = normalizeAngle(item.theta);
-    const x = cx + R_start_safe * Math.cos(theta);
-    const y = cy + R_start_safe * Math.sin(theta);
+    const theta = item.theta;
+    const x = cx + labelRadius * Math.cos(theta);
+    const y = cy + labelRadius * Math.sin(theta);
     const rotationDeg = (theta * 180) / Math.PI;
     let finalRotation = rotationDeg;
     let anchor: "start" | "end" = "start";
@@ -1056,14 +941,14 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
     text.attr("font-family", "Open Sans, sans-serif");
-    text.attr("font-size", "12");
+    text.attr("font-size", "10");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
     }
     text.attr("data-trend", item.trendKey);
     text.attr("data-label-theta", String(theta));
-    const estimatedRadialLength = item.label.length * 7;
+    const estimatedRadialLength = item.label.length * CHAR_WIDTH_PX;
     if (estimatedRadialLength > maxRadial) {
       text.attr("textLength", String(maxRadial));
       text.attr("lengthAdjust", "spacingAndGlyphs");
@@ -1182,7 +1067,7 @@ function drawStraightBubbleLabelConnectors(
     }
   });
 
-  const domHitCircles = svg.find("circle.bubble").toArray();
+  const domHitCircles = svg.find("circle.bubble, circle.trend-bubble, circle[data-trend]").toArray();
   const connectorItems = (domHitCircles.length > 0
     ? domHitCircles.map((node) => {
         const bubble = $(node);
@@ -1190,7 +1075,7 @@ function drawStraightBubbleLabelConnectors(
         const by = Number.parseFloat(bubble.attr("cy") ?? "");
         if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
 
-        const clusterId = (bubble.attr("data-cluster-id") ?? "").trim();
+        const clusterId = (bubble.attr("data-cluster-id") ?? bubble.attr("data-cluster") ?? "").trim();
         const trend = (bubble.attr("data-trend") ?? "").trim();
         const label = clusterId ? clusterIdToLabel.get(clusterId) : trend ? trendToLabel.get(trend) : undefined;
         if (!label || !label.length) return null;
@@ -1280,13 +1165,11 @@ function drawStraightBubbleLabelConnectors(
       const vy = Math.sin(thetaLabel);
       const tx = -vy;
       const ty = vx;
-      let p3x = item.lx - vx * 8;
-      let p3y = item.ly - vy * 8;
-      if (item.anchor === "start" || item.anchor === "end") {
-        const tangential = item.anchor === "end" ? -3 : 3;
-        p3x += tx * tangential;
-        p3y += ty * tangential;
-      }
+
+      // Connector endpoint: intersection with outermost teal circle
+      const p3x = cxRadar + R_tealOuter * vx;
+      const p3y = cyRadar + R_tealOuter * vy;
+
       const distance = Math.hypot(p3x - item.bx, p3y - item.by);
       const c1 = Math.max(30, Math.min(160, distance * 0.22));
       const c2 = Math.max(40, Math.min(190, distance * 0.32));
