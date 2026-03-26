@@ -1593,11 +1593,67 @@ export function transformTrendRadarHtmlToStyledSvg(
   }
   const normalizedBubbles = collectNormalizedBubbles($, svgEl as Cheerio<CheerioElement>, warnings);
 
+  // ── Normalize to 1000×1000 output coordinate space ──
+  const OUTPUT_SIZE = 1000;
+  const OUTPUT_CENTER = OUTPUT_SIZE / 2; // 500
+  const FIXED_FRAME_RADIUS = 400; // outermost teal circle radius in output space
+
+  // Detect input dimensions
+  const vb = getViewBox(svgEl);
+  const inputW = vb?.width ?? toNum(svgEl.attr("width")) ?? OUTPUT_SIZE;
+  const inputH = vb?.height ?? toNum(svgEl.attr("height")) ?? OUTPUT_SIZE;
+  const inputCx = (vb?.minX ?? 0) + inputW / 2;
+  const inputCy = (vb?.minY ?? 0) + inputH / 2;
+  const inputRadius = Math.min(inputW, inputH) / 2;
+  const bubbleScale = FIXED_FRAME_RADIUS / inputRadius;
+
+  // Scale all bubble DOM nodes to output coordinate space
+  svgEl.find("circle[data-trend], circle.bubble, circle.trend-bubble, circle[data-bucket], circle[class*='bucket']")
+    .not(".bubble-hit")
+    .each((_, node) => {
+      const el = $(node);
+      const bx = Number.parseFloat(el.attr("cx") ?? "");
+      const by = Number.parseFloat(el.attr("cy") ?? "");
+      const br = Number.parseFloat(el.attr("r") ?? "");
+      if (!Number.isFinite(bx) || !Number.isFinite(by)) return;
+      el.attr("cx", String(OUTPUT_CENTER + (bx - inputCx) * bubbleScale));
+      el.attr("cy", String(OUTPUT_CENTER + (by - inputCy) * bubbleScale));
+      if (Number.isFinite(br)) el.attr("r", String(br * bubbleScale));
+    });
+
+  // Scale normalizedBubbles array to match
+  normalizedBubbles.forEach((nb) => {
+    nb.cx = OUTPUT_CENTER + (nb.cx - inputCx) * bubbleScale;
+    nb.cy = OUTPUT_CENTER + (nb.cy - inputCy) * bubbleScale;
+    nb.r = nb.r * bubbleScale;
+  });
+
+  // Scale axis lines
+  svgEl.find("line").each((_, node) => {
+    const el = $(node);
+    const attrs = ["x1", "y1", "x2", "y2"] as const;
+    const vals = attrs.map(a => Number.parseFloat(el.attr(a) ?? ""));
+    if (!vals.every(Number.isFinite)) return;
+    el.attr("x1", String(OUTPUT_CENTER + (vals[0] - inputCx) * bubbleScale));
+    el.attr("y1", String(OUTPUT_CENTER + (vals[1] - inputCy) * bubbleScale));
+    el.attr("x2", String(OUTPUT_CENTER + (vals[2] - inputCx) * bubbleScale));
+    el.attr("y2", String(OUTPUT_CENTER + (vals[3] - inputCy) * bubbleScale));
+  });
+
+  // Set SVG to fixed output size
+  svgEl.attr("width", String(OUTPUT_SIZE));
+  svgEl.attr("height", String(OUTPUT_SIZE));
+  svgEl.attr("viewBox", `0 0 ${OUTPUT_SIZE} ${OUTPUT_SIZE}`);
+
+  // Override meta to use fixed output coordinates
   const meta = phase1Detect($, svgEl);
+  meta.center = { x: OUTPUT_CENTER, y: OUTPUT_CENTER };
+  meta.frameRadius = FIXED_FRAME_RADIUS;
+
   annotateSvg(svgEl, meta);
   ensureBackgroundRings(svgEl, meta);
   removeOriginalBubbleLabels($, svgEl, meta, normalizedBubbles);
-  
+
   // Extend diagonal axis lines to the grey circle radius and style them white
 const cx = meta.center.x;
 const cy = meta.center.y;
