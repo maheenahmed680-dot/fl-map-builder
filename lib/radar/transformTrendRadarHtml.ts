@@ -199,6 +199,17 @@ function collectNormalizedBubbles(
     });
   });
 
+  // ── Normalize bubble radii so the largest bubble matches TARGET_MAX_R ──
+  const TARGET_MAX_R = 25; // tunable: desired max bubble radius in output space
+  const maxInputR = Math.max(...bubbles.map((b) => b.r), 1);
+  const radiusScale = TARGET_MAX_R / maxInputR;
+
+  console.log(`[collectNormalizedBubbles] maxInputR=${maxInputR.toFixed(2)}, radiusScale=${radiusScale.toFixed(4)}`);
+
+  bubbles.forEach((b) => {
+    b.r = b.r * radiusScale;
+  });
+
   warnings.push(`Normalized bubbles found: ${bubbles.length}`);
 
   return bubbles;
@@ -1618,14 +1629,12 @@ export function transformTrendRadarHtmlToStyledSvg(
       if (!Number.isFinite(bx) || !Number.isFinite(by)) return;
       el.attr("cx", String(OUTPUT_CENTER + (bx - inputCx) * bubbleScale));
       el.attr("cy", String(OUTPUT_CENTER + (by - inputCy) * bubbleScale));
-      if (Number.isFinite(br)) el.attr("r", String(br * bubbleScale));
     });
 
-  // Scale normalizedBubbles array to match
+  // Scale normalizedBubbles positions to match (r already normalized in collectNormalizedBubbles)
   normalizedBubbles.forEach((nb) => {
     nb.cx = OUTPUT_CENTER + (nb.cx - inputCx) * bubbleScale;
     nb.cy = OUTPUT_CENTER + (nb.cy - inputCy) * bubbleScale;
-    nb.r = nb.r * bubbleScale;
   });
 
   // Scale axis lines
