@@ -527,21 +527,55 @@ function ensurePwlgLabelsAndPercents(
   svgEl.children("#radar-pwlg").remove();
   const group = $('<g id="radar-pwlg"></g>');
 
-  const entries: Array<{ label: string; percent: string; theta: number; anchor: "start" | "middle" | "end" }> = [
-    { label: "Wirtschaft", percent: "30%", theta: -Math.PI / 2, anchor: "middle" },
-    { label: "Politik", percent: "31%", theta: Math.PI, anchor: "end" },
-    { label: "Legitimation", percent: "26%", theta: 0, anchor: "start" },
-    { label: "Gesellschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle" },
+  const entries: Array<{
+    label: string; percent: string; theta: number;
+    anchor: "start" | "middle" | "end"; rotation: number;
+  }> = [
+    { label: "Wirtschaft", percent: "30%", theta: -Math.PI / 2, anchor: "middle", rotation: 0 },
+    { label: "Politik", percent: "31%", theta: Math.PI, anchor: "middle", rotation: -90 },
+    { label: "Legitimation", percent: "26%", theta: 0, anchor: "middle", rotation: 90 },
+    { label: "Gesellschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle", rotation: 0 },
   ];
 
   const labelRadius = greyR + 16;
   const percentRadius = greyR + 40;
+  const STACK_OFFSET = 16; // half-gap between stacked percent + label for rotated entries
 
   entries.forEach((entry) => {
-    const labelX = cx + labelRadius * Math.cos(entry.theta);
-    const labelY = cy + labelRadius * Math.sin(entry.theta);
-    const percentX = cx + percentRadius * Math.cos(entry.theta);
-    const percentY = cy + percentRadius * Math.sin(entry.theta);
+    const isRotated = entry.rotation !== 0;
+
+    let labelX: number, labelY: number, percentX: number, percentY: number;
+
+    if (isRotated) {
+      // For rotated entries (left/right), position at a single radial point
+      // and offset horizontally so that after rotation they stack vertically
+      // (percent above, label below)
+      const sideRadius = (labelRadius + percentRadius) / 2;
+      const baseX = cx + sideRadius * Math.cos(entry.theta);
+      const baseY = cy;
+
+      if (entry.rotation === -90) {
+        // Left side: rotate(-90) maps (x+d, y) → (x, y-d)
+        // percent closer to center (+d) → appears above after rotation
+        percentX = baseX + STACK_OFFSET;
+        percentY = baseY;
+        labelX = baseX - STACK_OFFSET;
+        labelY = baseY;
+      } else {
+        // Right side: rotate(90) maps (x-d, y) → (x, y-d)
+        // percent closer to center (-d) → appears above after rotation
+        percentX = baseX - STACK_OFFSET;
+        percentY = baseY;
+        labelX = baseX + STACK_OFFSET;
+        labelY = baseY;
+      }
+    } else {
+      // Top/bottom: no rotation, place radially as before
+      labelX = cx + labelRadius * Math.cos(entry.theta);
+      labelY = cy + labelRadius * Math.sin(entry.theta);
+      percentX = cx + percentRadius * Math.cos(entry.theta);
+      percentY = cy + percentRadius * Math.sin(entry.theta);
+    }
 
     const labelText = $("<text></text>");
     labelText.attr("x", String(labelX));
@@ -552,6 +586,9 @@ function ensurePwlgLabelsAndPercents(
     labelText.attr("font-size", "24");
     labelText.attr("font-weight", "500");
     labelText.attr("fill", "#111");
+    if (isRotated) {
+      labelText.attr("transform", `rotate(${entry.rotation}, ${labelX}, ${labelY})`);
+    }
     labelText.text(entry.label);
     group.append(labelText);
 
@@ -564,6 +601,9 @@ function ensurePwlgLabelsAndPercents(
     percentText.attr("font-size", "24");
     percentText.attr("font-weight", "700");
     percentText.attr("fill", "url(#fl-tealGradient)");
+    if (isRotated) {
+      percentText.attr("transform", `rotate(${entry.rotation}, ${percentX}, ${percentY})`);
+    }
     percentText.text(entry.percent);
     group.append(percentText);
   });
@@ -605,13 +645,32 @@ function ensureDottedOutlineWithGaps(
   const group = $('<g id="radar-dotted-outline" pointer-events="none"></g>');
 
   const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const centers = [45, 135, 225, 315].map(toRad);
-  const segments: Array<{ start: number; end: number }> = [
-    { start: centers[0] + gapAngle / 2, end: centers[1] - gapAngle / 2 },
-    { start: centers[1] + gapAngle / 2, end: centers[2] - gapAngle / 2 },
-    { start: centers[2] + gapAngle / 2, end: centers[3] - gapAngle / 2 },
-    { start: centers[3] + gapAngle / 2, end: centers[0] - gapAngle / 2 + Math.PI * 2 },
+
+  // 8 gaps: 4 diagonal (logos) + 4 cardinal (PWLG text)
+  const logoGapHalf = gapAngle / 2;
+  const horizTextGapHalf = (80 / R); // top/bottom horizontal PWLG text
+  const rotTextGapHalf = (40 / R);   // left/right rotated PWLG text
+
+  const gaps: Array<{ center: number; halfAngle: number }> = [
+    { center: toRad(0),   halfAngle: rotTextGapHalf },    // right (Legitimation)
+    { center: toRad(45),  halfAngle: logoGapHalf },        // logo
+    { center: toRad(90),  halfAngle: horizTextGapHalf },   // bottom (Gesellschaft)
+    { center: toRad(135), halfAngle: logoGapHalf },        // logo
+    { center: toRad(180), halfAngle: rotTextGapHalf },     // left (Politik)
+    { center: toRad(225), halfAngle: logoGapHalf },        // logo
+    { center: toRad(270), halfAngle: horizTextGapHalf },   // top (Wirtschaft)
+    { center: toRad(315), halfAngle: logoGapHalf },        // logo
   ];
+
+  // Build arc segments between consecutive gaps
+  const segments: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < gaps.length; i++) {
+    const j = (i + 1) % gaps.length;
+    const start = gaps[i].center + gaps[i].halfAngle;
+    let end = gaps[j].center - gaps[j].halfAngle;
+    if (end <= start) end += Math.PI * 2; // wrap-around for last segment
+    segments.push({ start, end });
+  }
 
   const pointAt = (angle: number) => ({
     x: cx + R * Math.cos(angle),
