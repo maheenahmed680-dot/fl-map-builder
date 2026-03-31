@@ -1247,7 +1247,7 @@ function normalizeRadarLayerOrder($: CheerioAPI, svg: Cheerio<NodeHandle>) {
     ringsGroup.append(child);
   });
 
-  svg.find("circle.bubble, image.bubble").toArray().forEach((node) => {
+  svg.find("circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble, image.trend-bubble, image[data-trend]").toArray().forEach((node) => {
     const bubble = $(node);
     if (bubble.closest("#radar-bubbles").length) return;
     bubble.remove();
@@ -1638,6 +1638,16 @@ export function transformTrendRadarHtmlToStyledSvg(
     el.attr("y1", String(OUTPUT_CENTER + (vals[1] - inputCy) * bubbleScale));
     el.attr("x2", String(OUTPUT_CENTER + (vals[2] - inputCx) * bubbleScale));
     el.attr("y2", String(OUTPUT_CENTER + (vals[3] - inputCy) * bubbleScale));
+  });
+
+  // Scale original inner bubble labels so removeOriginalBubbleLabels can detect them
+  svgEl.find("text.trend-label, text[text-anchor='middle']").each((_, node) => {
+    const el = $(node);
+    const tx = Number.parseFloat(el.attr("x") ?? "");
+    const ty = Number.parseFloat(el.attr("y") ?? "");
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return;
+    el.attr("x", String(OUTPUT_CENTER + (tx - inputCx) * bubbleScale));
+    el.attr("y", String(OUTPUT_CENTER + (ty - inputCy) * bubbleScale));
   });
 
   // Set SVG to fixed output size
