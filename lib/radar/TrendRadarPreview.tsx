@@ -23,8 +23,7 @@ const CONNECTOR_COLORS: Record<string, string> = {
 };
 
 const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
-const SLOT_COUNT = 48;
-const SLOT_EXCLUSION_PX = 14; // px distance to exclude near existing labels
+const SLOT_GAP_THRESHOLD_PX = 28; // minimum gap in px to place a slot between two labels
 
 function normalizeSvgValue(value: string | null | undefined) {
   const normalized = value?.trim();
@@ -189,6 +188,7 @@ function computeSlots(
 
   const { cx, cy } = readSvgCenter(svg);
   const R_slot = (R_tealOuter + R_greyOuter) / 2;
+  const minGapAngle = SLOT_GAP_THRESHOLD_PX / R_slot;
 
   // Find the selected bubble's position
   const bubbleNodes = Array.from(
@@ -204,30 +204,46 @@ function computeSlots(
   const bubbleAngle = Math.atan2(by - cy, bx - cx);
   const bubbleQuadrant = getQuadrant(bubbleAngle);
 
-  // Collect existing label thetas (excluding the selected bubble's own label)
-  const existingThetas: number[] = [];
+  // Collect all label thetas, normalized to [0, 2π), sorted ascending
+  const thetas: number[] = [];
   svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text[data-label-theta]").forEach((label) => {
-    const isOwn = matchesSelectedNode(label, selectedClusterId, selectedTrend);
-    if (isOwn) return;
-    const theta = Number.parseFloat(label.getAttribute("data-label-theta") ?? "");
-    if (Number.isFinite(theta)) existingThetas.push(theta);
+    const raw = Number.parseFloat(label.getAttribute("data-label-theta") ?? "");
+    if (!Number.isFinite(raw)) return;
+    let t = raw % (2 * Math.PI);
+    if (t < 0) t += 2 * Math.PI;
+    thetas.push(t);
   });
+  thetas.sort((a, b) => a - b);
 
-  const exclusionAngle = SLOT_EXCLUSION_PX / R_slot;
+  if (thetas.length === 0) return [];
 
+  // Find gaps wider than minGapAngle; place a slot at each gap midpoint
+  const candidates: number[] = [];
+  for (let i = 0; i < thetas.length; i++) {
+    const j = (i + 1) % thetas.length;
+    let gap: number;
+    if (j === 0) {
+      // Wrap-around gap: from last theta to first theta + 2π
+      gap = thetas[0] + 2 * Math.PI - thetas[thetas.length - 1];
+    } else {
+      gap = thetas[j] - thetas[i];
+    }
+    if (gap > minGapAngle) {
+      let mid: number;
+      if (j === 0) {
+        mid = thetas[thetas.length - 1] + gap / 2;
+        if (mid >= 2 * Math.PI) mid -= 2 * Math.PI;
+      } else {
+        mid = thetas[i] + gap / 2;
+      }
+      candidates.push(mid);
+    }
+  }
+
+  // Apply opposite-quadrant exclusion
   const slots: Slot[] = [];
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const angle = (i * 2 * Math.PI) / SLOT_COUNT;
-
+  for (const angle of candidates) {
     if (!isInAllowedArc(angle, bubbleQuadrant)) continue;
-
-    // Check proximity to existing labels
-    const tooClose = existingThetas.some((theta) => {
-      const diff = Math.abs(normalizeAngle(angle - theta));
-      return diff < exclusionAngle;
-    });
-    if (tooClose) continue;
-
     slots.push({
       angle,
       x: cx + R_slot * Math.cos(angle),
@@ -359,6 +375,9 @@ export function TrendRadarPreview({
   }, [selectedBubbleKey, svgMarkup]);
 
   // ── Render slot circles into the SVG DOM ──
+  const selectedBubbleKeyRef = useRef(selectedBubbleKey);
+  selectedBubbleKeyRef.current = selectedBubbleKey;
+
   useEffect(() => {
     const svg = previewSvgRef.current?.querySelector("svg");
     if (!svg) return;
@@ -368,7 +387,7 @@ export function TrendRadarPreview({
     if (slots.length === 0) return;
 
     // Determine hover color from selected bubble's type
-    const { clusterId, trend } = parseSelectedBubbleKey(selectedBubbleKey);
+    const { clusterId, trend } = parseSelectedBubbleKey(selectedBubbleKeyRef.current);
     const bubbleNodes = Array.from(
       svg.querySelectorAll<SVGElement>("circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble"),
     );
@@ -392,7 +411,7 @@ export function TrendRadarPreview({
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", String(slot.x));
       circle.setAttribute("cy", String(slot.y));
-      circle.setAttribute("r", "5");
+      circle.setAttribute("r", "10");
       circle.setAttribute("fill", "#e0e0e0");
       circle.setAttribute("stroke", "none");
       circle.setAttribute("cursor", "pointer");
@@ -400,11 +419,11 @@ export function TrendRadarPreview({
 
       circle.addEventListener("mouseenter", () => {
         circle.setAttribute("fill", hoverColor);
-        circle.setAttribute("r", "7");
+        circle.setAttribute("r", "12");
       });
       circle.addEventListener("mouseleave", () => {
         circle.setAttribute("fill", "#e0e0e0");
-        circle.setAttribute("r", "5");
+        circle.setAttribute("r", "10");
       });
 
       slotsGroup.appendChild(circle);
@@ -413,7 +432,7 @@ export function TrendRadarPreview({
     return () => {
       svg.querySelector("#radar-slots")?.remove();
     };
-  }, [slots, selectedBubbleKey]);
+  }, [slots]);
 
   const handleSlotClick = useCallback(
     (slotIndex: number) => {
