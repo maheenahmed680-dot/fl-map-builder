@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "Next.js Dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; npm run dev"],
       "port": 3000,
       "autoPort": true
     }

@@ -268,29 +268,44 @@ export function TrendRadarPreview({
   const [translateY, setTranslateY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [slots, setSlots] = useState<Slot[]>([]);
+  const [labelOverrides, setLabelOverrides] = useState<Record<string, number>>({});
 
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const isDraggingRef = useRef(false);
+  const appliedSelectionRef = useRef<{ clusterId: string | null; trend: string | null }>({ clusterId: null, trend: null });
+  const labelOverridesRef = useRef<Record<string, number>>({});
+  labelOverridesRef.current = labelOverrides;
   const suppressClickRef = useRef(false);
   const previewSvgRef = useRef<HTMLDivElement | null>(null);
+  // Stable ref callback: fires only on mount. Sets innerHTML from the svgMarkup
+  // value captured at mount time; svgMarkup changes are handled by the useEffect below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const svgContainerRef = useCallback((node: HTMLDivElement | null) => {
+    previewSvgRef.current = node;
+    if (node) node.innerHTML = svgMarkup;
+  }, []);
 
   const displayFont = { fontFamily: "Montserrat, Open Sans, Arial, sans-serif" } as const;
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+  const prevSvgMarkupRef = useRef(svgMarkup);
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setZoom(1);
-      setTranslateX(0);
-      setTranslateY(0);
-      setIsDragging(false);
-      setSlots([]);
-      dragStartRef.current = null;
-      isDraggingRef.current = false;
-      suppressClickRef.current = false;
-    });
+    if (svgMarkup === prevSvgMarkupRef.current) return;
+    prevSvgMarkupRef.current = svgMarkup;
 
-    return () => window.cancelAnimationFrame(frame);
-  }, [svgMarkup]);
+    // svgMarkup changed — replace the SVG DOM manually (no dangerouslySetInnerHTML)
+    if (previewSvgRef.current) previewSvgRef.current.innerHTML = svgMarkup;
+
+    setZoom(1);
+  setTranslateX(0);
+  setTranslateY(0);
+  setIsDragging(false);
+  setSlots([]);
+  setLabelOverrides({});
+  dragStartRef.current = null;
+  isDraggingRef.current = false;
+  suppressClickRef.current = false;
+}, [svgMarkup]);
 
   useEffect(() => {
     const root = previewSvgRef.current;
@@ -309,57 +324,60 @@ export function TrendRadarPreview({
     }, 0);
   }, [svgMarkup]);
 
+  // Re-apply highlight + label overrides when svgMarkup changes (dangerouslySetInnerHTML replaces the SVG DOM)
   useEffect(() => {
     const svg = previewSvgRef.current?.querySelector("svg");
     if (!svg) return;
 
-    svg.querySelectorAll(".is-selected-bubble").forEach((node) => node.classList.remove("is-selected-bubble"));
-    svg.querySelectorAll(".is-selected-label").forEach((node) => node.classList.remove("is-selected-label"));
-    svg.querySelectorAll(".is-selected-connector").forEach((node) => node.classList.remove("is-selected-connector"));
+    // 1. Restore selection highlight
+    const { clusterId, trend } = appliedSelectionRef.current;
+    applySelectionHighlight(svg, clusterId, trend);
 
-    const { clusterId: selectedClusterId, trend: selectedTrend } = parseSelectedBubbleKey(selectedBubbleKey);
-    if (!selectedClusterId && !selectedTrend) return;
+    // 2. Restore all label + connector overrides
+    const overrides = labelOverridesRef.current;
+    if (Object.keys(overrides).length === 0) return;
 
-    const bubbleNodes = Array.from(svg.querySelectorAll<SVGElement>("circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble, image.trend-bubble"));
-    const labelNodes = Array.from(svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text"));
-    const connectorNodes = Array.from(
-      svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
-    );
+    const { R_tealOuter } = readSvgRadii(svg as SVGSVGElement);
+    const { cx, cy } = readSvgCenter(svg as SVGSVGElement);
+    const labelRadius = R_tealOuter + LABEL_OFFSET;
 
-    bubbleNodes
-      .filter((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend))
-      .forEach((node) => node.classList.add("is-selected-bubble"));
+    for (const [key, theta] of Object.entries(overrides)) {
+      const { clusterId: oc, trend: ot } = parseSelectedBubbleKey(key);
 
-    labelNodes
-      .filter((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend))
-      .forEach((node) => node.classList.add("is-selected-label"));
-
-    const connectorsByAttribute = connectorNodes.filter((node) =>
-      matchesSelectedNode(node, selectedClusterId, selectedTrend),
-    );
-    if (connectorsByAttribute.length > 0) {
-      connectorsByAttribute.forEach((node) => node.classList.add("is-selected-connector"));
-      return;
-    }
-
-    const selectedBubbleCircle = Array.from(
-      svg.querySelectorAll<SVGCircleElement>("circle.bubble, circle.trend-bubble, circle[data-trend]"),
-    ).find((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend));
-    if (!selectedBubbleCircle) return;
-
-    const cx = Number.parseFloat(selectedBubbleCircle.getAttribute("cx") ?? "");
-    const cy = Number.parseFloat(selectedBubbleCircle.getAttribute("cy") ?? "");
-    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
-
-    connectorNodes.forEach((node) => {
-      const startPoint = getConnectorStartPoint(node);
-      if (!startPoint) return;
-
-      if (Math.abs(startPoint.x - cx) <= 0.75 && Math.abs(startPoint.y - cy) <= 0.75) {
-        node.classList.add("is-selected-connector");
+      const label = Array.from(svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text"))
+        .find((n) => matchesSelectedNode(n, oc, ot));
+      if (label) {
+        applyLabelPosition(label, theta, cx, cy, labelRadius);
+        label.setAttribute("data-label-theta", String(theta));
       }
-    });
-  }, [selectedBubbleKey, svgMarkup]);
+
+      const bubbleNode = Array.from(
+        svg.querySelectorAll<SVGCircleElement>("circle.bubble, circle.trend-bubble, circle[data-trend]"),
+      ).find((n) => matchesSelectedNode(n, oc, ot));
+      if (!bubbleNode) continue;
+
+      const bx = Number.parseFloat(bubbleNode.getAttribute("cx") ?? "");
+      const by = Number.parseFloat(bubbleNode.getAttribute("cy") ?? "");
+      if (!Number.isFinite(bx) || !Number.isFinite(by)) continue;
+
+      const connector = Array.from(
+        svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
+      ).find((node) => {
+        const sp = getConnectorStartPoint(node);
+        return sp && Math.abs(sp.x - bx) <= 0.75 && Math.abs(sp.y - by) <= 0.75;
+      });
+      if (!connector) continue;
+
+      const vx = Math.cos(theta);
+      const vy = Math.sin(theta);
+      const p3x = cx + R_tealOuter * vx;
+      const p3y = cy + R_tealOuter * vy;
+      const distance = Math.hypot(p3x - bx, p3y - by);
+      const c1 = Math.max(30, Math.min(160, distance * 0.22));
+      const c2 = Math.max(40, Math.min(190, distance * 0.32));
+      connector.setAttribute("d", `M ${bx} ${by} C ${bx + vx * c1} ${by + vy * c1} ${p3x - vx * c2} ${p3y - vy * c2} ${p3x} ${p3y}`);
+    }
+  }, [svgMarkup]);
 
   // ── Compute slots when a bubble is selected ──
   useEffect(() => {
@@ -419,11 +437,9 @@ export function TrendRadarPreview({
 
       circle.addEventListener("mouseenter", () => {
         circle.setAttribute("fill", hoverColor);
-        circle.setAttribute("r", "12");
       });
       circle.addEventListener("mouseleave", () => {
         circle.setAttribute("fill", "#e0e0e0");
-        circle.setAttribute("r", "10");
       });
 
       slotsGroup.appendChild(circle);
@@ -434,69 +450,139 @@ export function TrendRadarPreview({
     };
   }, [slots]);
 
-  const handleSlotClick = useCallback(
-    (slotIndex: number) => {
-      const svg = previewSvgRef.current?.querySelector("svg");
-      if (!svg || !selectedBubbleKey) return;
+  // ── Apply label + connector overrides set by slot clicks ──
+  useEffect(() => {
+    const svg = previewSvgRef.current?.querySelector("svg");
+    if (!svg || Object.keys(labelOverrides).length === 0) return;
 
-      const slot = slots[slotIndex];
-      if (!slot) return;
+    const { R_tealOuter } = readSvgRadii(svg);
+    const { cx, cy } = readSvgCenter(svg);
+    const labelRadius = R_tealOuter + LABEL_OFFSET;
 
-      const { clusterId, trend } = parseSelectedBubbleKey(selectedBubbleKey);
-      const { R_tealOuter } = readSvgRadii(svg);
-      const { cx, cy } = readSvgCenter(svg);
-      const labelRadius = R_tealOuter + LABEL_OFFSET;
+    for (const [key, theta] of Object.entries(labelOverrides)) {
+      const { clusterId, trend } = parseSelectedBubbleKey(key);
 
-      // 1. Reposition the label
       const labelNodes = Array.from(svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text"));
       const label = labelNodes.find((n) => matchesSelectedNode(n, clusterId, trend));
       if (label) {
-        applyLabelPosition(label, slot.angle, cx, cy, labelRadius);
-        label.setAttribute("data-label-theta", String(slot.angle));
+        applyLabelPosition(label, theta, cx, cy, labelRadius);
+        label.setAttribute("data-label-theta", String(theta));
       }
 
-      // 2. Find and rewrite the connector path
-      const bubbleNodes = Array.from(
+      const bubbleNode = Array.from(
         svg.querySelectorAll<SVGCircleElement>("circle.bubble, circle.trend-bubble, circle[data-trend]"),
+      ).find((n) => matchesSelectedNode(n, clusterId, trend));
+      if (!bubbleNode) continue;
+
+      const bx = Number.parseFloat(bubbleNode.getAttribute("cx") ?? "");
+      const by = Number.parseFloat(bubbleNode.getAttribute("cy") ?? "");
+      if (!Number.isFinite(bx) || !Number.isFinite(by)) continue;
+
+      const connectorNodes = Array.from(
+        svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
       );
-      const bubbleNode = bubbleNodes.find((n) => matchesSelectedNode(n, clusterId, trend));
-      if (bubbleNode) {
-        const bx = Number.parseFloat(bubbleNode.getAttribute("cx") ?? "");
-        const by = Number.parseFloat(bubbleNode.getAttribute("cy") ?? "");
-        if (Number.isFinite(bx) && Number.isFinite(by)) {
-          const connectorNodes = Array.from(
-            svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
-          );
+      const connector = connectorNodes.find((node) => {
+        const startPoint = getConnectorStartPoint(node);
+        if (!startPoint) return false;
+        return Math.abs(startPoint.x - bx) <= 0.75 && Math.abs(startPoint.y - by) <= 0.75;
+      });
+      if (!connector) continue;
 
-          const connector = connectorNodes.find((node) => {
-            const startPoint = getConnectorStartPoint(node);
-            if (!startPoint) return false;
-            return Math.abs(startPoint.x - bx) <= 0.75 && Math.abs(startPoint.y - by) <= 0.75;
-          });
+      const vx = Math.cos(theta);
+      const vy = Math.sin(theta);
+      const p3x = cx + R_tealOuter * vx;
+      const p3y = cy + R_tealOuter * vy;
+      const distance = Math.hypot(p3x - bx, p3y - by);
+      const c1 = Math.max(30, Math.min(160, distance * 0.22));
+      const c2 = Math.max(40, Math.min(190, distance * 0.32));
+      const p1x = bx + vx * c1;
+      const p1y = by + vy * c1;
+      const p2x = p3x - vx * c2;
+      const p2y = p3y - vy * c2;
+      connector.setAttribute("d", `M ${bx} ${by} C ${p1x} ${p1y} ${p2x} ${p2y} ${p3x} ${p3y}`);
+    }
+  }, [labelOverrides, svgMarkup]);
 
-          if (connector) {
-            const vx = Math.cos(slot.angle);
-            const vy = Math.sin(slot.angle);
-            const p3x = cx + R_tealOuter * vx;
-            const p3y = cy + R_tealOuter * vy;
-            const distance = Math.hypot(p3x - bx, p3y - by);
-            const c1 = Math.max(30, Math.min(160, distance * 0.22));
-            const c2 = Math.max(40, Math.min(190, distance * 0.32));
-            const p1x = bx + vx * c1;
-            const p1y = by + vy * c1;
-            const p2x = p3x - vx * c2;
-            const p2y = p3y - vy * c2;
-            connector.setAttribute("d", `M ${bx} ${by} C ${p1x} ${p1y} ${p2x} ${p2y} ${p3x} ${p3y}`);
-          }
-        }
-      }
+  const handleSlotClick = useCallback(
+    (slotIndex: number) => {
+      if (!selectedBubbleKey) return;
+      const slot = slots[slotIndex];
+      if (!slot) return;
 
-      // 3. Clear slots and deselect
+      setLabelOverrides((prev) => ({ ...prev, [selectedBubbleKey]: slot.angle }));
       setSlots([]);
       onBubbleSelect(null);
     },
     [slots, selectedBubbleKey, onBubbleSelect],
   );
+
+  function applySelectionHighlight(svg: Element, selectedClusterId: string | null, selectedTrend: string | null) {
+    appliedSelectionRef.current = { clusterId: selectedClusterId, trend: selectedTrend };
+
+    svg.querySelector("#radar-selection-highlight")?.remove();
+    svg.querySelectorAll(".is-selected-bubble").forEach((node) => node.classList.remove("is-selected-bubble"));
+    svg.querySelectorAll(".is-selected-label").forEach((node) => node.classList.remove("is-selected-label"));
+    svg.querySelectorAll(".is-selected-connector").forEach((node) => node.classList.remove("is-selected-connector"));
+
+    if (!selectedClusterId && !selectedTrend) return;
+
+    const bubbleNodes = Array.from(svg.querySelectorAll<SVGElement>("circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble, image.trend-bubble"));
+    const labelNodes = Array.from(svg.querySelectorAll<SVGTextElement>("#radar-labels-outer text"));
+    const connectorNodes = Array.from(
+      svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
+    );
+
+    bubbleNodes
+      .filter((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend))
+      .forEach((node) => node.classList.add("is-selected-bubble"));
+
+    labelNodes
+      .filter((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend))
+      .forEach((node) => node.classList.add("is-selected-label"));
+
+    const selectedBubbleCircle = Array.from(
+      svg.querySelectorAll<SVGCircleElement>("circle.bubble, circle.trend-bubble, circle[data-trend]"),
+    ).find((node) => matchesSelectedNode(node, selectedClusterId, selectedTrend));
+
+    const cx = Number.parseFloat(selectedBubbleCircle?.getAttribute("cx") ?? "");
+    const cy = Number.parseFloat(selectedBubbleCircle?.getAttribute("cy") ?? "");
+    const br = Number.parseFloat(selectedBubbleCircle?.getAttribute("r") ?? "");
+
+    if (selectedBubbleCircle && Number.isFinite(cx) && Number.isFinite(cy) && br > 0) {
+      const highlightG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      highlightG.id = "radar-selection-highlight";
+      highlightG.style.pointerEvents = "none";
+      const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      ring.setAttribute("cx", String(cx));
+      ring.setAttribute("cy", String(cy));
+      ring.setAttribute("r", String(br));
+      ring.setAttribute("fill", "none");
+      ring.setAttribute("stroke", "#77acff");
+      ring.setAttribute("stroke-width", "2");
+      highlightG.appendChild(ring);
+      const bubblesGroup = svg.querySelector("#radar-bubbles");
+      svg.insertBefore(highlightG, bubblesGroup?.nextSibling ?? null);
+    }
+
+    const connectorsByAttribute = connectorNodes.filter((node) =>
+      matchesSelectedNode(node, selectedClusterId, selectedTrend),
+    );
+    if (connectorsByAttribute.length > 0) {
+      connectorsByAttribute.forEach((node) => node.classList.add("is-selected-connector"));
+      return;
+    }
+
+    if (!selectedBubbleCircle || !Number.isFinite(cx) || !Number.isFinite(cy)) return;
+
+    connectorNodes.forEach((node) => {
+      const startPoint = getConnectorStartPoint(node);
+      if (!startPoint) return;
+
+      if (Math.abs(startPoint.x - cx) <= 0.75 && Math.abs(startPoint.y - cy) <= 0.75) {
+        node.classList.add("is-selected-connector");
+      }
+    });
+  }
 
   function handleClick(event: React.MouseEvent<HTMLDivElement>) {
     if (suppressClickRef.current) {
@@ -521,12 +607,27 @@ export function TrendRadarPreview({
     if (!selectableNode) {
       onBubbleSelect(null);
       setSlots([]);
+      // Clear highlight immediately via DOM
+      const svg = previewSvgRef.current?.querySelector("svg");
+      if (svg) applySelectionHighlight(svg, null, null);
       return;
     }
 
     const clusterId = normalizeSvgValue(selectableNode.getAttribute("data-cluster-id"));
     const trend = normalizeSvgValue(selectableNode.getAttribute("data-trend"));
-    onBubbleSelect(toBubbleSelectionKey(clusterId, trend));
+    const newKey = toBubbleSelectionKey(clusterId, trend);
+    const svg = previewSvgRef.current?.querySelector("svg");
+
+    // Toggle: clicking the same bubble again deselects
+    if (newKey === selectedBubbleKey) {
+      onBubbleSelect(null);
+      setSlots([]);
+      if (svg) applySelectionHighlight(svg, null, null);
+      return;
+    }
+
+    onBubbleSelect(newKey);
+    if (svg) applySelectionHighlight(svg, clusterId, trend);
   }
 
   function handleZoomIn() {
@@ -696,7 +797,7 @@ export function TrendRadarPreview({
           .trend-preview-svg svg #radar-connectors line.is-selected-connector,
           .trend-preview-svg svg #radar-connectors polyline.is-selected-connector{
             stroke:#77acff !important;
-            stroke-width:1.35 !important;
+            stroke-width:1.5 !important;
             opacity:1;
           }
           .trend-preview-svg svg #radar-labels-outer text.is-selected-label{
@@ -781,9 +882,8 @@ export function TrendRadarPreview({
                 }}
               >
                 <div
-                  ref={previewSvgRef}
+                  ref={svgContainerRef}
                   className="trend-preview-svg"
-                  dangerouslySetInnerHTML={{ __html: svgMarkup }}
                 />
               </div>
             </div>

@@ -1437,7 +1437,7 @@ function replaceBubbleCirclesWithImages(
   const SCALE_BIG = 1.78;
   const SCALE_MED = 1.48;
   const SCALE_TIGHT = 1.34;
-  const HIT_SCALE = 1.55;
+  const HIT_SCALE = 2.03; // SCALE_BIG (1.78) + 0.25 — must clear the largest image overlay
   const bubbleNodes = normalizedBubbles.map((nb) => {
     const bubble = nb.node;
     return {
