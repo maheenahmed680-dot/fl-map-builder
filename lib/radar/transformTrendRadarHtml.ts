@@ -199,6 +199,17 @@ function collectNormalizedBubbles(
     });
   });
 
+  // ── Normalize bubble radii so the largest bubble matches TARGET_MAX_R ──
+  const TARGET_MAX_R = 25; // tunable: desired max bubble radius in output space
+  const maxInputR = Math.max(...bubbles.map((b) => b.r), 1);
+  const radiusScale = TARGET_MAX_R / maxInputR;
+
+  console.log(`[collectNormalizedBubbles] maxInputR=${maxInputR.toFixed(2)}, radiusScale=${radiusScale.toFixed(4)}`);
+
+  bubbles.forEach((b) => {
+    b.r = b.r * radiusScale;
+  });
+
   warnings.push(`Normalized bubbles found: ${bubbles.length}`);
 
   return bubbles;
@@ -516,21 +527,55 @@ function ensurePwlgLabelsAndPercents(
   svgEl.children("#radar-pwlg").remove();
   const group = $('<g id="radar-pwlg"></g>');
 
-  const entries: Array<{ label: string; percent: string; theta: number; anchor: "start" | "middle" | "end" }> = [
-    { label: "Wirtschaft", percent: "30%", theta: -Math.PI / 2, anchor: "middle" },
-    { label: "Politik", percent: "31%", theta: Math.PI, anchor: "end" },
-    { label: "Legitimation", percent: "26%", theta: 0, anchor: "start" },
-    { label: "Gesellschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle" },
+  const entries: Array<{
+    label: string; percent: string; theta: number;
+    anchor: "start" | "middle" | "end"; rotation: number;
+  }> = [
+    { label: "Wirtschaft", percent: "30%", theta: -Math.PI / 2, anchor: "middle", rotation: 0 },
+    { label: "Politik", percent: "31%", theta: Math.PI, anchor: "middle", rotation: -90 },
+    { label: "Legitimation", percent: "26%", theta: 0, anchor: "middle", rotation: 90 },
+    { label: "Gesellschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle", rotation: 0 },
   ];
 
   const labelRadius = greyR + 16;
   const percentRadius = greyR + 40;
+  const STACK_OFFSET = 16; // half-gap between stacked percent + label for rotated entries
 
   entries.forEach((entry) => {
-    const labelX = cx + labelRadius * Math.cos(entry.theta);
-    const labelY = cy + labelRadius * Math.sin(entry.theta);
-    const percentX = cx + percentRadius * Math.cos(entry.theta);
-    const percentY = cy + percentRadius * Math.sin(entry.theta);
+    const isRotated = entry.rotation !== 0;
+
+    let labelX: number, labelY: number, percentX: number, percentY: number;
+
+    if (isRotated) {
+      // For rotated entries (left/right), position at a single radial point
+      // and offset horizontally so that after rotation they stack vertically
+      // (percent above, label below)
+      const sideRadius = (labelRadius + percentRadius) / 2;
+      const baseX = cx + sideRadius * Math.cos(entry.theta);
+      const baseY = cy;
+
+      if (entry.rotation === -90) {
+        // Left side: rotate(-90) maps (x+d, y) → (x, y-d)
+        // percent closer to center (+d) → appears above after rotation
+        percentX = baseX + STACK_OFFSET;
+        percentY = baseY;
+        labelX = baseX - STACK_OFFSET;
+        labelY = baseY;
+      } else {
+        // Right side: rotate(90) maps (x-d, y) → (x, y-d)
+        // percent closer to center (-d) → appears above after rotation
+        percentX = baseX - STACK_OFFSET;
+        percentY = baseY;
+        labelX = baseX + STACK_OFFSET;
+        labelY = baseY;
+      }
+    } else {
+      // Top/bottom: no rotation, place radially as before
+      labelX = cx + labelRadius * Math.cos(entry.theta);
+      labelY = cy + labelRadius * Math.sin(entry.theta);
+      percentX = cx + percentRadius * Math.cos(entry.theta);
+      percentY = cy + percentRadius * Math.sin(entry.theta);
+    }
 
     const labelText = $("<text></text>");
     labelText.attr("x", String(labelX));
@@ -541,6 +586,9 @@ function ensurePwlgLabelsAndPercents(
     labelText.attr("font-size", "24");
     labelText.attr("font-weight", "500");
     labelText.attr("fill", "#111");
+    if (isRotated) {
+      labelText.attr("transform", `rotate(${entry.rotation}, ${labelX}, ${labelY})`);
+    }
     labelText.text(entry.label);
     group.append(labelText);
 
@@ -553,6 +601,9 @@ function ensurePwlgLabelsAndPercents(
     percentText.attr("font-size", "24");
     percentText.attr("font-weight", "700");
     percentText.attr("fill", "url(#fl-tealGradient)");
+    if (isRotated) {
+      percentText.attr("transform", `rotate(${entry.rotation}, ${percentX}, ${percentY})`);
+    }
     percentText.text(entry.percent);
     group.append(percentText);
   });
@@ -594,13 +645,32 @@ function ensureDottedOutlineWithGaps(
   const group = $('<g id="radar-dotted-outline" pointer-events="none"></g>');
 
   const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const centers = [45, 135, 225, 315].map(toRad);
-  const segments: Array<{ start: number; end: number }> = [
-    { start: centers[0] + gapAngle / 2, end: centers[1] - gapAngle / 2 },
-    { start: centers[1] + gapAngle / 2, end: centers[2] - gapAngle / 2 },
-    { start: centers[2] + gapAngle / 2, end: centers[3] - gapAngle / 2 },
-    { start: centers[3] + gapAngle / 2, end: centers[0] - gapAngle / 2 + Math.PI * 2 },
+
+  // 8 gaps: 4 diagonal (logos) + 4 cardinal (PWLG text)
+  const logoGapHalf = gapAngle / 2;
+  const horizTextGapHalf = (80 / R); // top/bottom horizontal PWLG text
+  const rotTextGapHalf = (40 / R);   // left/right rotated PWLG text
+
+  const gaps: Array<{ center: number; halfAngle: number }> = [
+    { center: toRad(0),   halfAngle: rotTextGapHalf },    // right (Legitimation)
+    { center: toRad(45),  halfAngle: logoGapHalf },        // logo
+    { center: toRad(90),  halfAngle: horizTextGapHalf },   // bottom (Gesellschaft)
+    { center: toRad(135), halfAngle: logoGapHalf },        // logo
+    { center: toRad(180), halfAngle: rotTextGapHalf },     // left (Politik)
+    { center: toRad(225), halfAngle: logoGapHalf },        // logo
+    { center: toRad(270), halfAngle: horizTextGapHalf },   // top (Wirtschaft)
+    { center: toRad(315), halfAngle: logoGapHalf },        // logo
   ];
+
+  // Build arc segments between consecutive gaps
+  const segments: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < gaps.length; i++) {
+    const j = (i + 1) % gaps.length;
+    const start = gaps[i].center + gaps[i].halfAngle;
+    let end = gaps[j].center - gaps[j].halfAngle;
+    if (end <= start) end += Math.PI * 2; // wrap-around for last segment
+    segments.push({ start, end });
+  }
 
   const pointAt = (angle: number) => ({
     x: cx + R * Math.cos(angle),
@@ -719,86 +789,6 @@ function applyOuterLabelPosition(
   label.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
 }
 
-function getOuterLabelThetaBounds(theta: number) {
-  const angle = normalizeAngle(theta);
-  const pad = Math.PI / 180;
-
-  if (angle >= -Math.PI / 4 && angle < Math.PI / 4) {
-    return { min: -Math.PI / 4 + pad, max: Math.PI / 4 - pad };
-  }
-  if (angle >= Math.PI / 4 && angle < (3 * Math.PI) / 4) {
-    return { min: Math.PI / 4 + pad, max: (3 * Math.PI) / 4 - pad };
-  }
-  if (angle >= (-3 * Math.PI) / 4 && angle < -Math.PI / 4) {
-    return { min: (-3 * Math.PI) / 4 + pad, max: -Math.PI / 4 - pad };
-  }
-  if (angle >= (3 * Math.PI) / 4) {
-    return { min: (3 * Math.PI) / 4 + pad, max: Math.PI - pad };
-  }
-  return { min: -Math.PI + pad, max: (-3 * Math.PI) / 4 - pad };
-}
-
-
-function partitionDenseRuns<T extends { thetaLane: number }>(items: T[], minGap: number) {
-  const runs: T[][] = [];
-  let current: T[] = [];
-
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
-    if (current.length === 0) {
-      current.push(item);
-      continue;
-    }
-
-    const prev = current[current.length - 1];
-    if (item.thetaLane - prev.thetaLane < minGap) {
-      current.push(item);
-    } else {
-      runs.push(current);
-      current = [item];
-    }
-  }
-
-  if (current.length) runs.push(current);
-  return runs;
-}
-
-function redistributeRunEvenlyLocal<
-  T extends {
-    itemMin: number;
-    itemMax: number;
-    origLaneTheta: number;
-    thetaLane: number;
-  }
->(run: T[], minGap: number) {
-  if (run.length <= 1) return;
-
-  const firstOrig = run[0].origLaneTheta;
-  const lastOrig = run[run.length - 1].origLaneTheta;
-
-  let start = Math.max(run[0].itemMin, firstOrig);
-  let end = Math.min(run[run.length - 1].itemMax, lastOrig);
-
-  const neededSpan = minGap * (run.length - 1) * 1.12;
-
-  if (end - start < neededSpan) {
-    const center = (firstOrig + lastOrig) / 2;
-    start = Math.max(run[0].itemMin, center - neededSpan / 2);
-    end = Math.min(run[run.length - 1].itemMax, start + neededSpan);
-    start = Math.max(run[0].itemMin, end - neededSpan);
-  }
-
-  if (run.length === 2) {
-    run[0].thetaLane = start;
-    run[1].thetaLane = end;
-    return;
-  }
-
-  const step = (end - start) / (run.length - 1);
-  run.forEach((entry, index) => {
-    entry.thetaLane = Math.max(entry.itemMin, Math.min(entry.itemMax, start + step * index));
-  });
-}
 
 function appendOuterGreyRingLabels(
   $: CheerioAPI,
@@ -824,7 +814,7 @@ let R_start_safe = R_start + START_INSET;
 R_start_safe = Math.max(R_start_safe, R_tealOuter + 12 + BAND_PADDING);
 R_start_safe = Math.min(R_start_safe, BAND_OUTER - BAND_PADDING - 4);
 
-const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
+const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
 
   let R_label = (BAND_INNER + BAND_OUTER) / 2;
@@ -862,7 +852,13 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
   });
   // --- END NEW
 
-  const domBubbles = svg.find("circle.bubble:not(.bubble-hit)");
+  // ── Tunable constant: approximate px width per character at 10px font ──
+  const CHAR_WIDTH_PX = 7;
+  const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
+  const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
+
+  // ── Collect bubbles and compute initial angles ──
+  const domBubbles = svg.find("circle.bubble:not(.bubble-hit), circle.trend-bubble:not(.bubble-hit), circle[data-trend]:not(.bubble-hit)");
   const items = (domBubbles.length > 0
     ? domBubbles.toArray().map((node) => {
         const bubble = $(node);
@@ -880,35 +876,25 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
             ? (toNum(bubble.attr("y")) ?? 0) + (toNum(bubble.attr("height")) ?? 0) / 2
             : toNum(bubble.attr("cy"));
         const label = (bubble.attr("data-trend") ?? siblingLabel).replace(/\s+/g, " ").trim();
-        const clusterId = (bubble.attr("data-cluster-id") ?? "").trim();
+        const clusterId = (bubble.attr("data-cluster-id") ?? bubble.attr("data-cluster") ?? "").trim();
         const trendKey = (bubble.attr("data-trend") ?? label).replace(/\s+/g, " ").trim();
 
         if (bx == null || by == null || !label) return null;
 
         const thetaRaw = Math.atan2(by - cy, bx - cx);
-        return {
-          label,
-          theta: normalizeAngle(thetaRaw),
-          origTheta: normalizeAngle(thetaRaw),
-          bounds: getOuterLabelThetaBounds(thetaRaw),
-          quad: getConnectorQuadrantInfo(thetaRaw).id,
-          clusterId,
-          trendKey,
-        };
+        return { label, theta: thetaRaw, origTheta: thetaRaw, clusterId, trendKey, halfWidth: 0 };
       })
     : normalizedBubbles.map((bubble) => {
         const label = (bubble.label ?? "").replace(/\s+/g, " ").trim();
         if (!label) return null;
         const thetaRaw = Math.atan2(bubble.cy - cy, bubble.cx - cx);
-
         return {
           label,
-          theta: normalizeAngle(thetaRaw),
-          origTheta: normalizeAngle(thetaRaw),
-          bounds: getOuterLabelThetaBounds(thetaRaw),
-          quad: getConnectorQuadrantInfo(thetaRaw).id,
+          theta: thetaRaw,
+          origTheta: thetaRaw,
           clusterId: (bubble.clusterId ?? "").trim(),
           trendKey: (bubble.label ?? "").replace(/\s+/g, " ").trim(),
+          halfWidth: 0,
         };
       }))
     .filter(
@@ -916,131 +902,100 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
         label: string;
         theta: number;
         origTheta: number;
-        bounds: { min: number; max: number };
-        quad: number;
         clusterId: string;
         trendKey: string;
+        halfWidth: number;
       } => Boolean(item),
-    )
-    .sort((left, right) => left.theta - right.theta);
+    );
 
   if (items.length === 0) return;
 
-    const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
-  const toLaneTheta = (value: number, quad: number) =>
-    quad === 2 && value < 0 ? value + Math.PI * 2 : value;
-
-  const quadrantGroups = new Map<number, typeof items>();
+  // ── Estimate angular half-width for each label ──
+  // Labels are rotated as spokes (radially outward), so their angular footprint
+  // is determined by the FONT HEIGHT (not text length). Text length extends
+  // radially, not along the circumference.
+  const labelRadius = R_tealOuter + LABEL_OFFSET;
+  const FONT_HEIGHT_PX = 14; // 10px font + line spacing
+  const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
+  // Dynamic minimum gap: scales down when there are many labels so they can all fit
+  const MIN_ANGULAR_GAP = Math.max(
+    3 * (Math.PI / 180),                         // at least 3°
+    (Math.PI * 2 / items.length) * 0.6,          // 60% of even spacing
+  );
   items.forEach((item) => {
-    const existing = quadrantGroups.get(item.quad) ?? [];
-    existing.push(item);
-    quadrantGroups.set(item.quad, existing);
+    item.halfWidth = Math.max(baseAngularHalfWidth, MIN_ANGULAR_GAP / 2);
   });
 
-  quadrantGroups.forEach((group) => {
-    const quadInfo = getConnectorQuadrantInfo(group[0].origTheta);
+  // ── Convert to [0, 2π) and sort by angle ──
+  items.forEach((item) => {
+    item.theta = item.theta < 0 ? item.theta + Math.PI * 2 : item.theta;
+    item.origTheta = item.theta; // store in [0, 2π) form
+  });
+  items.sort((a, b) => a.theta - b.theta);
 
-    group.sort(
-      (left, right) =>
-        toLaneTheta(left.origTheta, left.quad) - toLaneTheta(right.origTheta, right.quad),
-    );
+  // ── Iterative push-apart relaxation ──
+  const TWO_PI = Math.PI * 2;
 
-    const laneItems = group
-      .map((item) => {
-        const itemMin = Math.max(toLaneTheta(item.bounds.min, item.quad), quadInfo.min);
-        const itemMax = Math.min(toLaneTheta(item.bounds.max, item.quad), quadInfo.max);
-        if (itemMin >= itemMax) return null;
+  const pushApart = (maxPasses: number) => {
+    for (let pass = 0; pass < maxPasses; pass++) {
+      let moved = false;
+      for (let i = 0; i < items.length; i++) {
+        const j = (i + 1) % items.length;
+        const a = items[i];
+        const b = items[j];
 
-        const origLaneTheta = toLaneTheta(item.origTheta, item.quad);
+        let gap = b.theta - a.theta;
+        if (j === 0) gap += TWO_PI; // wrap-around from last to first
 
-        return {
-          item,
-          itemMin,
-          itemMax,
-          origLaneTheta,
-          thetaLane: clamp(origLaneTheta, itemMin, itemMax),
-        };
-      })
-      .filter(
-        (entry): entry is {
-          item: (typeof group)[number];
-          itemMin: number;
-          itemMax: number;
-          origLaneTheta: number;
-          thetaLane: number;
-        } => Boolean(entry),
-      );
-
-    if (!laneItems.length) return;
-
-    const MIN_GAP = 32 / R_start_safe;
-
-    const runs: Array<typeof laneItems> = [];
-    let currentRun: typeof laneItems = [];
-
-    laneItems.forEach((entry, index) => {
-      if (currentRun.length === 0) {
-        currentRun.push(entry);
-        return;
+        const needed = a.halfWidth + b.halfWidth;
+        if (gap < needed) {
+          const overlap = needed - gap;
+          a.theta -= overlap / 2;
+          b.theta += overlap / 2;
+          moved = true;
+        }
       }
-
-      const prev = laneItems[index - 1];
-      const gap = entry.thetaLane - prev.thetaLane;
-
-      if (gap < MIN_GAP) {
-        currentRun.push(entry);
-      } else {
-        runs.push(currentRun);
-        currentRun = [entry];
-      }
-    });
-
-    if (currentRun.length) runs.push(currentRun);
-
-    runs.forEach((run) => {
-      if (run.length <= 1) return;
-
-      const runMin = Math.max(...run.map((entry, i) => entry.itemMin - i * MIN_GAP));
-      const runMax = Math.min(...run.map((entry, i) => entry.itemMax - i * MIN_GAP));
-
-      let start = run[0].origLaneTheta;
-      start = Math.max(runMin, Math.min(runMax, start));
-
-      run.forEach((entry, i) => {
-        entry.thetaLane = start + i * MIN_GAP;
+      // Re-normalize to [0, 2π) after each pass
+      items.forEach((item) => {
+        item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
       });
-    });
-    // Final rescue pass for near-identical theta pairs
-    laneItems.sort((a, b) => a.thetaLane - b.thetaLane);
-
-    const RESCUE_GAP = 26 / R_start_safe;
-
-    for (let i = 1; i < laneItems.length; i += 1) {
-      const prev = laneItems[i - 1];
-      const curr = laneItems[i];
-
-      if (curr.thetaLane - prev.thetaLane < RESCUE_GAP) {
-        const candidate = prev.thetaLane + RESCUE_GAP;
-
-        // stay inside quadrant bounds if possible
-        curr.thetaLane = Math.max(
-          curr.itemMin,
-          Math.min(curr.itemMax, candidate),
-        );
-      }
+      // Re-sort since items may have crossed
+      items.sort((a, b) => a.theta - b.theta);
+      if (!moved) break;
     }
-    laneItems.forEach((entry) => {
-      const theta =
-        entry.thetaLane > Math.PI ? entry.thetaLane - Math.PI * 2 : entry.thetaLane;
-      entry.item.theta = normalizeAngle(theta);
-    });
+  };
+
+  pushApart(50);
+
+  // ── Clamp: each label must stay within ±90° of its original bubble angle ──
+  items.forEach((item) => {
+    let delta = item.theta - item.origTheta;
+    // Wrap delta to [-π, π]
+    if (delta > Math.PI) delta -= TWO_PI;
+    if (delta < -Math.PI) delta += TWO_PI;
+
+    if (Math.abs(delta) > MAX_DRIFT) {
+      item.theta = item.origTheta + Math.sign(delta) * MAX_DRIFT;
+      item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
+    }
   });
 
+  // Second push-apart pass to fix overlaps re-introduced by clamping
+  items.sort((a, b) => a.theta - b.theta);
+  pushApart(20);
+
+  // ── Convert back to [-π, π] for rendering ──
+  items.forEach((item) => {
+    if (item.theta > Math.PI) item.theta -= TWO_PI;
+    item.theta = normalizeAngle(item.theta);
+  });
+
+  // ── Create SVG text elements ──
   const group = $('<g id="radar-labels-outer"></g>');
   items.forEach((item) => {
-    const theta = normalizeAngle(item.theta);
-    const x = cx + R_start_safe * Math.cos(theta);
-    const y = cy + R_start_safe * Math.sin(theta);
+    const theta = item.theta;
+    const x = cx + labelRadius * Math.cos(theta);
+    const y = cy + labelRadius * Math.sin(theta);
     const rotationDeg = (theta * 180) / Math.PI;
     let finalRotation = rotationDeg;
     let anchor: "start" | "end" = "start";
@@ -1056,14 +1011,14 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - R_start_safe);
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
     text.attr("font-family", "Open Sans, sans-serif");
-    text.attr("font-size", "12");
+    text.attr("font-size", "10");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
     }
     text.attr("data-trend", item.trendKey);
     text.attr("data-label-theta", String(theta));
-    const estimatedRadialLength = item.label.length * 7;
+    const estimatedRadialLength = item.label.length * CHAR_WIDTH_PX;
     if (estimatedRadialLength > maxRadial) {
       text.attr("textLength", String(maxRadial));
       text.attr("lengthAdjust", "spacingAndGlyphs");
@@ -1100,7 +1055,7 @@ function removeOriginalBubbleLabels(
     const fontSizeRaw = text.attr("font-size") ?? "";
     const fontSize = Number.parseFloat(fontSizeRaw);
     const isMiddle = textAnchor === "middle";
-    const isSmall = Number.isFinite(fontSize) && fontSize <= 12;
+    const isSmall = Number.isFinite(fontSize) && fontSize <= 14;
     if (!isMiddle && !isSmall) return;
 
     const insideTeal = Math.hypot(x - meta.center.x, y - meta.center.y) <= R_tealOuter + 4;
@@ -1182,7 +1137,7 @@ function drawStraightBubbleLabelConnectors(
     }
   });
 
-  const domHitCircles = svg.find("circle.bubble").toArray();
+  const domHitCircles = svg.find("circle.bubble, circle.trend-bubble, circle[data-trend]").toArray();
   const connectorItems = (domHitCircles.length > 0
     ? domHitCircles.map((node) => {
         const bubble = $(node);
@@ -1190,7 +1145,7 @@ function drawStraightBubbleLabelConnectors(
         const by = Number.parseFloat(bubble.attr("cy") ?? "");
         if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
 
-        const clusterId = (bubble.attr("data-cluster-id") ?? "").trim();
+        const clusterId = (bubble.attr("data-cluster-id") ?? bubble.attr("data-cluster") ?? "").trim();
         const trend = (bubble.attr("data-trend") ?? "").trim();
         const label = clusterId ? clusterIdToLabel.get(clusterId) : trend ? trendToLabel.get(trend) : undefined;
         if (!label || !label.length) return null;
@@ -1280,13 +1235,11 @@ function drawStraightBubbleLabelConnectors(
       const vy = Math.sin(thetaLabel);
       const tx = -vy;
       const ty = vx;
-      let p3x = item.lx - vx * 8;
-      let p3y = item.ly - vy * 8;
-      if (item.anchor === "start" || item.anchor === "end") {
-        const tangential = item.anchor === "end" ? -3 : 3;
-        p3x += tx * tangential;
-        p3y += ty * tangential;
-      }
+
+      // Connector endpoint: intersection with outermost teal circle
+      const p3x = cxRadar + R_tealOuter * vx;
+      const p3y = cyRadar + R_tealOuter * vy;
+
       const distance = Math.hypot(p3x - item.bx, p3y - item.by);
       const c1 = Math.max(30, Math.min(160, distance * 0.22));
       const c2 = Math.max(40, Math.min(190, distance * 0.32));
@@ -1364,7 +1317,7 @@ function normalizeRadarLayerOrder($: CheerioAPI, svg: Cheerio<NodeHandle>) {
     ringsGroup.append(child);
   });
 
-  svg.find("circle.bubble, image.bubble").toArray().forEach((node) => {
+  svg.find("circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble, image.trend-bubble, image[data-trend]").toArray().forEach((node) => {
     const bubble = $(node);
     if (bubble.closest("#radar-bubbles").length) return;
     bubble.remove();
@@ -1484,7 +1437,7 @@ function replaceBubbleCirclesWithImages(
   const SCALE_BIG = 1.78;
   const SCALE_MED = 1.48;
   const SCALE_TIGHT = 1.34;
-  const HIT_SCALE = 1.55;
+  const HIT_SCALE = 2.03; // SCALE_BIG (1.78) + 0.25 — must clear the largest image overlay
   const bubbleNodes = normalizedBubbles.map((nb) => {
     const bubble = nb.node;
     return {
@@ -1710,11 +1663,121 @@ export function transformTrendRadarHtmlToStyledSvg(
   }
   const normalizedBubbles = collectNormalizedBubbles($, svgEl as Cheerio<CheerioElement>, warnings);
 
+  // ── Normalize to 1000×1000 output coordinate space ──
+  const OUTPUT_SIZE = 1000;
+  const OUTPUT_CENTER = OUTPUT_SIZE / 2; // 500
+  const FIXED_FRAME_RADIUS = 400; // outermost teal circle radius in output space
+
+  // Detect input dimensions
+  const vb = getViewBox(svgEl);
+  const inputW = vb?.width ?? toNum(svgEl.attr("width")) ?? OUTPUT_SIZE;
+  const inputH = vb?.height ?? toNum(svgEl.attr("height")) ?? OUTPUT_SIZE;
+  const inputCx = (vb?.minX ?? 0) + inputW / 2;
+  const inputCy = (vb?.minY ?? 0) + inputH / 2;
+  const inputRadius = Math.min(inputW, inputH) / 2;
+  const bubbleScale = FIXED_FRAME_RADIUS / inputRadius;
+
+  // Detect whether this is a plus-axis input (horizontal + vertical lines through centre).
+  // Must be checked BEFORE line scaling so we read original input coordinates.
+  // Pflege2030 is a typical plus-axis radar: H line at y≈inputCy, V line at x≈inputCx.
+  const AXIS_INPUT_THRESHOLD = Math.max(12, inputRadius * 0.03);
+  const isPlusAxisInput = (() => {
+    const lineNodes = svgEl.find("line").toArray();
+    const hasH = lineNodes.some((node) => {
+      const el = $(node);
+      const y1 = Number.parseFloat(el.attr("y1") ?? "");
+      const y2 = Number.parseFloat(el.attr("y2") ?? "");
+      return Math.abs(y1 - inputCy) < AXIS_INPUT_THRESHOLD && Math.abs(y2 - inputCy) < AXIS_INPUT_THRESHOLD;
+    });
+    const hasV = lineNodes.some((node) => {
+      const el = $(node);
+      const x1 = Number.parseFloat(el.attr("x1") ?? "");
+      const x2 = Number.parseFloat(el.attr("x2") ?? "");
+      return Math.abs(x1 - inputCx) < AXIS_INPUT_THRESHOLD && Math.abs(x2 - inputCx) < AXIS_INPUT_THRESHOLD;
+    });
+    return hasH && hasV;
+  })();
+
+  // Scale all bubble DOM nodes to output coordinate space
+  svgEl.find("circle[data-trend], circle.bubble, circle.trend-bubble, circle[data-bucket], circle[class*='bucket']")
+    .not(".bubble-hit")
+    .each((_, node) => {
+      const el = $(node);
+      const bx = Number.parseFloat(el.attr("cx") ?? "");
+      const by = Number.parseFloat(el.attr("cy") ?? "");
+      const br = Number.parseFloat(el.attr("r") ?? "");
+      if (!Number.isFinite(bx) || !Number.isFinite(by)) return;
+      el.attr("cx", String(OUTPUT_CENTER + (bx - inputCx) * bubbleScale));
+      el.attr("cy", String(OUTPUT_CENTER + (by - inputCy) * bubbleScale));
+    });
+
+  // Scale normalizedBubbles positions to match (r already normalized in collectNormalizedBubbles)
+  normalizedBubbles.forEach((nb) => {
+    nb.cx = OUTPUT_CENTER + (nb.cx - inputCx) * bubbleScale;
+    nb.cy = OUTPUT_CENTER + (nb.cy - inputCy) * bubbleScale;
+  });
+
+  // If the input uses plus-shaped axes, rotate all bubble positions 45° CW in SVG space
+  // (−45° in standard math) around OUTPUT_CENTER so that quadrant alignment matches the
+  // diagonal-axis output: P(NW)→left, W(NE)→top, G(SW)→bottom, L(SE)→right.
+  if (isPlusAxisInput) {
+    const INV_SQRT2 = 1 / Math.SQRT2;
+    svgEl.find("circle[data-trend], circle.bubble, circle.trend-bubble, circle[data-bucket], circle[class*='bucket']")
+      .not(".bubble-hit")
+      .each((_, node) => {
+        const el = $(node);
+        const bx = Number.parseFloat(el.attr("cx") ?? "");
+        const by = Number.parseFloat(el.attr("cy") ?? "");
+        if (!Number.isFinite(bx) || !Number.isFinite(by)) return;
+        const dx = bx - OUTPUT_CENTER;
+        const dy = by - OUTPUT_CENTER;
+        el.attr("cx", String(OUTPUT_CENTER + (dx + dy) * INV_SQRT2));
+        el.attr("cy", String(OUTPUT_CENTER + (-dx + dy) * INV_SQRT2));
+      });
+    normalizedBubbles.forEach((nb) => {
+      const dx = nb.cx - OUTPUT_CENTER;
+      const dy = nb.cy - OUTPUT_CENTER;
+      nb.cx = OUTPUT_CENTER + (dx + dy) * INV_SQRT2;
+      nb.cy = OUTPUT_CENTER + (-dx + dy) * INV_SQRT2;
+    });
+  }
+
+  // Scale axis lines
+  svgEl.find("line").each((_, node) => {
+    const el = $(node);
+    const attrs = ["x1", "y1", "x2", "y2"] as const;
+    const vals = attrs.map(a => Number.parseFloat(el.attr(a) ?? ""));
+    if (!vals.every(Number.isFinite)) return;
+    el.attr("x1", String(OUTPUT_CENTER + (vals[0] - inputCx) * bubbleScale));
+    el.attr("y1", String(OUTPUT_CENTER + (vals[1] - inputCy) * bubbleScale));
+    el.attr("x2", String(OUTPUT_CENTER + (vals[2] - inputCx) * bubbleScale));
+    el.attr("y2", String(OUTPUT_CENTER + (vals[3] - inputCy) * bubbleScale));
+  });
+
+  // Scale original inner bubble labels so removeOriginalBubbleLabels can detect them
+  svgEl.find("text.trend-label, text[text-anchor='middle']").each((_, node) => {
+    const el = $(node);
+    const tx = Number.parseFloat(el.attr("x") ?? "");
+    const ty = Number.parseFloat(el.attr("y") ?? "");
+    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return;
+    el.attr("x", String(OUTPUT_CENTER + (tx - inputCx) * bubbleScale));
+    el.attr("y", String(OUTPUT_CENTER + (ty - inputCy) * bubbleScale));
+  });
+
+  // Set SVG to fixed output size
+  svgEl.attr("width", String(OUTPUT_SIZE));
+  svgEl.attr("height", String(OUTPUT_SIZE));
+  svgEl.attr("viewBox", `0 0 ${OUTPUT_SIZE} ${OUTPUT_SIZE}`);
+
+  // Override meta to use fixed output coordinates
   const meta = phase1Detect($, svgEl);
+  meta.center = { x: OUTPUT_CENTER, y: OUTPUT_CENTER };
+  meta.frameRadius = FIXED_FRAME_RADIUS;
+
   annotateSvg(svgEl, meta);
   ensureBackgroundRings(svgEl, meta);
   removeOriginalBubbleLabels($, svgEl, meta, normalizedBubbles);
-  
+
   // Extend diagonal axis lines to the grey circle radius and style them white
 const cx = meta.center.x;
 const cy = meta.center.y;
@@ -1723,6 +1786,43 @@ const cy = meta.center.y;
 const greyR =
   Number.parseFloat(svgEl.attr("data-radar-grey-r") ?? "") ||
   meta.frameRadius * 1.12; // fallback (should match your ring function)
+
+  // Convert plus-shaped (horizontal + vertical) axes to diagonal (X-shaped) axes.
+  // Inputs like Pflege2030 use a H/V cross; the output radar expects ±45° diagonals.
+  // Detection: a line is horizontal if both y-coords ≈ cy; vertical if both x-coords ≈ cx.
+  // We need both to be present before converting, so a single stray line is left alone.
+  {
+    const AXIS_THRESHOLD = 12; // px tolerance in output-space (center is at OUTPUT_CENTER)
+    const allLineNodes = svgEl.find("line").toArray();
+
+    const hNode = allLineNodes.find((node) => {
+      const el = $(node);
+      const y1 = Number.parseFloat(el.attr("y1") ?? "");
+      const y2 = Number.parseFloat(el.attr("y2") ?? "");
+      return Math.abs(y1 - cy) < AXIS_THRESHOLD && Math.abs(y2 - cy) < AXIS_THRESHOLD;
+    });
+    const vNode = allLineNodes.find((node) => {
+      const el = $(node);
+      const x1 = Number.parseFloat(el.attr("x1") ?? "");
+      const x2 = Number.parseFloat(el.attr("x2") ?? "");
+      return Math.abs(x1 - cx) < AXIS_THRESHOLD && Math.abs(x2 - cx) < AXIS_THRESHOLD;
+    });
+
+    if (hNode && vNode) {
+      // Use greyR as initial span — the extension loop below will normalize to exact boundary
+      const d = greyR / Math.SQRT2;
+      // Horizontal → 45° diagonal: top-left ↔ bottom-right
+      $(hNode)
+        .attr("x1", String(cx - d)).attr("y1", String(cy - d))
+        .attr("x2", String(cx + d)).attr("y2", String(cy + d))
+        .attr("stroke", "black").removeAttr("class");
+      // Vertical → −45° diagonal: top-right ↔ bottom-left
+      $(vNode)
+        .attr("x1", String(cx + d)).attr("y1", String(cy - d))
+        .attr("x2", String(cx - d)).attr("y2", String(cy + d))
+        .attr("stroke", "black").removeAttr("class");
+    }
+  }
 
   // Expand viewBox so the grey circle (and axes) never get clipped
 const padding = 40; // tweak 20–80 if needed
