@@ -103,101 +103,232 @@ function collectNormalizedBubbles(
 ): NormalizedBubble[] {
   const bubbles: NormalizedBubble[] = [];
 
-  const nodes = svg
-    .find(
-      [
-        "circle.bubble",
-        "circle.trend-bubble",
-        "circle[data-trend]",
-        "circle[data-bucket]",
-        'circle[class*="bucket"]',
-        "image.bubble",
-      ].join(", "),
-    )
-    .filter((_, el) => !$(el).hasClass("bubble-hit"));
-
-  nodes.each((_, el) => {
-    const node = $(el);
-    const tagName = ((el as { name?: string }).name ?? "").toLowerCase();
-
-    let cx: number | null = null;
-    let cy: number | null = null;
-    let r: number | null = null;
-
-    if (tagName === "image") {
-      const x = toNum(node.attr("x"));
-      const y = toNum(node.attr("y"));
-      const w = toNum(node.attr("width"));
-      const h = toNum(node.attr("height"));
-      if (x == null || y == null || w == null || h == null) {
-        warnings.push(
-          `Bubble <image> missing x/y/width/height; skipped. attrs=${JSON.stringify(
-            (el as { attribs?: Record<string, string> }).attribs ?? {},
-          )}`,
-        );
-        return;
-      }
-      cx = x + w / 2;
-      cy = y + h / 2;
-      r = Math.min(w, h) / 2;
-    } else {
-      cx = toNum(node.attr("cx"));
-      cy = toNum(node.attr("cy"));
-      r =
-        toNum(node.attr("data-radius-px") ?? undefined) ??
-        toNum(node.attr("data-radius") ?? undefined) ??
-        toNum(node.attr("r") ?? undefined);
-
+  // ── Format B: <g class="bubble" data-* ...><circle .../></g> on a 1500×1500 canvas ──
+  const formatBNodes = svg.find("g.bubble");
+  if (formatBNodes.length > 0) {
+    formatBNodes.each((_, el) => {
+      const gNode = $(el);
+      // Read pixel coords from the first child <circle> (already correct canvas coords).
+      const childCircle = gNode.find("circle").first();
+      const cx = toNum(childCircle.attr("cx"));
+      const cy = toNum(childCircle.attr("cy"));
+      // Radius comes from the <g> data attribute.
+      const r = toNum(gNode.attr("data-radius-px"));
       if (cx == null || cy == null || r == null) {
         warnings.push(
-          `Bubble missing cx/cy/r; skipped. attrs=${JSON.stringify(
+          `Format B bubble missing child circle cx/cy or data-radius-px; skipped. attrs=${JSON.stringify(
             (el as { attribs?: Record<string, string> }).attribs ?? {},
           )}`,
         );
         return;
       }
-    }
+      const clusterId =
+        gNode.attr("data-cluster-id") ??
+        gNode.attr("data-cluster") ??
+        gNode.attr("data-clusterid") ??
+        null;
+      const bucketRaw = gNode.attr("data-bucket");
+      const bucket = normalizeBucket(bucketRaw ?? "") ?? null;
+      const trend = gNode.attr("data-trend") ?? null;
+      const label = trend ? trend.replace(/\s+/g, " ").trim() : null;
+      if (!label) {
+        warnings.push(
+          `Format B bubble missing data-trend; label will be null. clusterId=${clusterId ?? "unknown"}`,
+        );
+      }
+      const resolvedType = bucket ? bucketBubbleTypeMap[bucket as BucketKey] : null;
 
-    const clusterId =
-      node.attr("data-cluster-id") ??
-      node.attr("data-cluster") ??
-      node.attr("data-clusterid") ??
-      null;
+      // Prepare the child circle: strip original styling, add class="bubble",
+      // copy all data-* attributes from the parent <g> so the pipeline can identify it.
+      childCircle.removeAttr("fill").removeAttr("fill-opacity").removeAttr("stroke");
+      const existingClass = (childCircle.attr("class") ?? "").trim();
+      childCircle.attr("class", existingClass ? `${existingClass} bubble` : "bubble");
+      const gAttribs = (el as { attribs?: Record<string, string> }).attribs ?? {};
+      for (const [name, value] of Object.entries(gAttribs)) {
+        if (name.startsWith("data-")) childCircle.attr(name, value);
+      }
 
-    const bucket = getBucketFromNode(node as unknown as Cheerio<NodeHandle>) ?? null;
+      // Move the circle out of the <g> and into the SVG root so the DOM scaling
+      // block (which searches for circle.bubble) can find and scale it.
+      childCircle.remove();
+      svg.append(childCircle);
 
-    const siblingText = node.next();
-    const siblingLabel =
-      siblingText.length > 0 && siblingText.is("text")
-        ? (siblingText.text() ?? "").replace(/\s+/g, " ").trim()
-        : "";
-    const labelRaw = node.attr("data-trend") ?? siblingLabel;
-    const label = labelRaw.replace(/\s+/g, " ").trim() || null;
-
-    if (!label) {
-      warnings.push(
-        `Bubble missing data-trend; label will be null. clusterId=${clusterId ?? "unknown"}`,
-      );
-    }
-
-    const fillRaw = node.attr("fill") ?? null;
-    const resolvedType =
-      (bucket ? bucketBubbleTypeMap[bucket] : null) ??
-      getBubbleTypeFromFill(fillRaw ?? undefined);
-
-    bubbles.push({
-      node: node as unknown as Cheerio<CheerioElement>,
-      tagName: tagName || "circle",
-      cx,
-      cy,
-      r,
-      clusterId,
-      bucket,
-      label,
-      fillRaw,
-      resolvedType,
+      bubbles.push({
+        node: childCircle as unknown as Cheerio<CheerioElement>,
+        tagName: "circle",
+        cx,
+        cy,
+        r,
+        clusterId,
+        bucket,
+        label,
+        fillRaw: null,
+        resolvedType,
+      });
     });
-  });
+    // Strip all non-bubble SVG content so the pipeline's center/ring detection
+    // isn't confused by existing circles, lines, and text from the source document.
+    svg.children().not("circle.bubble").remove();
+  } else {
+    // ── Format C: const data = [...] or const trends = [...] in a <script> tag ──
+    const ARRAY_RE = /const\s+(?:data|trends)\s*=\s*(\[[\s\S]*?\]);/;
+    let arrayMatch: RegExpMatchArray | null = null;
+    $("script").each((_, el) => {
+      if (arrayMatch) return;
+      const m = $(el).text().match(ARRAY_RE);
+      if (m) arrayMatch = m;
+    });
+
+    if (arrayMatch) {
+      let parsed: Record<string, unknown>[] | null = null;
+      try {
+        parsed = JSON.parse(arrayMatch[1]) as Record<string, unknown>[];
+      } catch {
+        try {
+          // eslint-disable-next-line no-new-func
+          parsed = new Function("return " + arrayMatch[1])() as Record<string, unknown>[];
+        } catch (e2) {
+          warnings.push(`Format C: failed to parse data array: ${String(e2)}`);
+        }
+      }
+      if (parsed) {
+        parsed.forEach((item) => {
+          const clusterIdRaw = item.Cluster_ID ?? item.cluster_id;
+          const clusterId = clusterIdRaw != null ? String(clusterIdRaw) : null;
+          const trendRaw = String(item.Trend ?? item.trend ?? "").trim();
+          const label = trendRaw || (clusterId ? `Cluster ${clusterId}` : null);
+          const cx = toNum(String(item.X ?? item.x ?? ""));
+          const cy = toNum(String(item.Y ?? item.y ?? ""));
+          const r = toNum(String(item.radius_px ?? ""));
+          if (cx == null || cy == null || r == null) {
+            warnings.push(
+              `Format C entry missing X/Y/radius_px; skipped. item=${JSON.stringify(item)}`,
+            );
+            return;
+          }
+          const bucketRaw = item.Bucket ?? item.bucket;
+          const bucket =
+            bucketRaw != null ? String(normalizeBucket(String(bucketRaw))) : null;
+          const fillRaw = null;
+          const resolvedType =
+            (bucket ? bucketBubbleTypeMap[bucket as BucketKey] : null) ?? null;
+          // Convert model coords (−1…1) directly to output space so the downstream
+          // scaling step is skipped entirely for this format.
+          bubbles.push({
+            node: $("<circle>") as unknown as Cheerio<CheerioElement>,
+            tagName: "circle",
+            cx: 500 + cx * 440,
+            cy: 500 - cy * 440,
+            r,
+            clusterId,
+            bucket,
+            label,
+            fillRaw,
+            resolvedType,
+          });
+        });
+        // Mark the SVG so the downstream scaling block skips these bubbles.
+        svg.attr("data-format-c", "true");
+      }
+    } else {
+      // ── Format A: <circle class="bubble" ...> (original logic) ──
+      const nodes = svg
+        .find(
+          [
+            "circle.bubble",
+            "circle.trend-bubble",
+            "circle[data-trend]",
+            "circle[data-bucket]",
+            'circle[class*="bucket"]',
+            "image.bubble",
+          ].join(", "),
+        )
+        .filter((_, el) => !$(el).hasClass("bubble-hit"));
+
+      nodes.each((_, el) => {
+        const node = $(el);
+        const tagName = ((el as { name?: string }).name ?? "").toLowerCase();
+
+        let cx: number | null = null;
+        let cy: number | null = null;
+        let r: number | null = null;
+
+        if (tagName === "image") {
+          const x = toNum(node.attr("x"));
+          const y = toNum(node.attr("y"));
+          const w = toNum(node.attr("width"));
+          const h = toNum(node.attr("height"));
+          if (x == null || y == null || w == null || h == null) {
+            warnings.push(
+              `Bubble <image> missing x/y/width/height; skipped. attrs=${JSON.stringify(
+                (el as { attribs?: Record<string, string> }).attribs ?? {},
+              )}`,
+            );
+            return;
+          }
+          cx = x + w / 2;
+          cy = y + h / 2;
+          r = Math.min(w, h) / 2;
+        } else {
+          cx = toNum(node.attr("cx"));
+          cy = toNum(node.attr("cy"));
+          r =
+            toNum(node.attr("data-radius-px") ?? undefined) ??
+            toNum(node.attr("data-radius") ?? undefined) ??
+            toNum(node.attr("r") ?? undefined);
+
+          if (cx == null || cy == null || r == null) {
+            warnings.push(
+              `Bubble missing cx/cy/r; skipped. attrs=${JSON.stringify(
+                (el as { attribs?: Record<string, string> }).attribs ?? {},
+              )}`,
+            );
+            return;
+          }
+        }
+
+        const clusterId =
+          node.attr("data-cluster-id") ??
+          node.attr("data-cluster") ??
+          node.attr("data-clusterid") ??
+          null;
+
+        const bucket = getBucketFromNode(node as unknown as Cheerio<NodeHandle>) ?? null;
+
+        const siblingText = node.next();
+        const siblingLabel =
+          siblingText.length > 0 && siblingText.is("text")
+            ? (siblingText.text() ?? "").replace(/\s+/g, " ").trim()
+            : "";
+        const labelRaw = node.attr("data-trend") ?? siblingLabel;
+        const label = labelRaw.replace(/\s+/g, " ").trim() || null;
+
+        if (!label) {
+          warnings.push(
+            `Bubble missing data-trend; label will be null. clusterId=${clusterId ?? "unknown"}`,
+          );
+        }
+
+        const fillRaw = node.attr("fill") ?? null;
+        const resolvedType =
+          (bucket ? bucketBubbleTypeMap[bucket as BucketKey] : null) ??
+          getBubbleTypeFromFill(fillRaw ?? undefined);
+
+        bubbles.push({
+          node: node as unknown as Cheerio<CheerioElement>,
+          tagName: tagName || "circle",
+          cx,
+          cy,
+          r,
+          clusterId,
+          bucket,
+          label,
+          fillRaw,
+          resolvedType,
+        });
+      });
+    }
+  }
 
   // ── Normalize bubble radii so the largest bubble matches TARGET_MAX_R ──
   const TARGET_MAX_R = 25; // tunable: desired max bubble radius in output space
@@ -534,12 +665,12 @@ function ensurePwlgLabelsAndPercents(
     { label: "Wirtschaft", percent: "30%", theta: -Math.PI / 2, anchor: "middle", rotation: 0 },
     { label: "Politik", percent: "31%", theta: Math.PI, anchor: "middle", rotation: -90 },
     { label: "Legitimation", percent: "26%", theta: 0, anchor: "middle", rotation: 90 },
-    { label: "Gesellschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle", rotation: 0 },
+    { label: "Gemeinschaft", percent: "13%", theta: Math.PI / 2, anchor: "middle", rotation: 0 },
   ];
 
-  const labelRadius = greyR + 16;
-  const percentRadius = greyR + 40;
-  const STACK_OFFSET = 16; // half-gap between stacked percent + label for rotated entries
+  const labelRadius = greyR + 30;
+  const percentRadius = greyR + 120;
+  const STACK_OFFSET = 20; // half-gap between stacked percent + label for rotated entries
 
   entries.forEach((entry) => {
     const isRotated = entry.rotation !== 0;
@@ -550,7 +681,7 @@ function ensurePwlgLabelsAndPercents(
       // For rotated entries (left/right), position at a single radial point
       // and offset horizontally so that after rotation they stack vertically
       // (percent above, label below)
-      const sideRadius = (labelRadius + percentRadius) / 2;
+      const sideRadius = greyR + 60;
       const baseX = cx + sideRadius * Math.cos(entry.theta);
       const baseY = cy;
 
@@ -915,7 +1046,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   // is determined by the FONT HEIGHT (not text length). Text length extends
   // radially, not along the circumference.
   const labelRadius = R_tealOuter + LABEL_OFFSET;
-  const FONT_HEIGHT_PX = 12; // 10px font + line spacing
+  const FONT_HEIGHT_PX = 14; // 10px font + line spacing
   const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
   // Dynamic minimum gap: scales down when there are many labels so they can all fit
   const MIN_ANGULAR_GAP = Math.max(
@@ -1055,7 +1186,7 @@ function removeOriginalBubbleLabels(
     const fontSizeRaw = text.attr("font-size") ?? "";
     const fontSize = Number.parseFloat(fontSizeRaw);
     const isMiddle = textAnchor === "middle";
-    const isSmall = Number.isFinite(fontSize) && fontSize <= 12;
+    const isSmall = Number.isFinite(fontSize) && fontSize <= 14;
     if (!isMiddle && !isSmall) return;
 
     const insideTeal = Math.hypot(x - meta.center.x, y - meta.center.y) <= R_tealOuter + 4;
@@ -1362,14 +1493,8 @@ function getBubbleTypeFromFill(fillRaw: string | undefined): BubbleType | null {
 }
 
 function normalizeBucket(raw: string | null | undefined): BucketKey | null {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (!value) return null;
-  if (value === "1" || value === "2" || value === "3" || value === "4") {
-    return value;
-  }
-  const direct = value.match(/^bucket\s*([1-4])$/i);
-  if (direct) return direct[1] as BucketKey;
-  return null;
+  const digit = String(raw ?? "").match(/\d/);
+  return digit ? digit[0] as BucketKey : null;
 }
 
 function getBucketFromClass(classAttr: string | null | undefined): BucketKey | null {
@@ -1452,6 +1577,7 @@ function replaceBubbleCirclesWithImages(
   });
 
   bubbleNodes.forEach(({ node, cx, cy, rBase, bucket, fillRaw, resolvedType }) => {
+    console.log('BUBBLE:', { bucket, resolvedType, fillRaw });
     const bubble = node;
     if (bubble.hasClass("bubble-hit")) return;
 
@@ -1677,6 +1803,27 @@ export function transformTrendRadarHtmlToStyledSvg(
   const inputRadius = Math.min(inputW, inputH) / 2;
   const bubbleScale = FIXED_FRAME_RADIUS / inputRadius;
 
+  // Detect whether this is a plus-axis input (horizontal + vertical lines through centre).
+  // Must be checked BEFORE line scaling so we read original input coordinates.
+  // Pflege2030 is a typical plus-axis radar: H line at y≈inputCy, V line at x≈inputCx.
+  const AXIS_INPUT_THRESHOLD = Math.max(12, inputRadius * 0.03);
+  const isPlusAxisInput = (() => {
+    const lineNodes = svgEl.find("line").toArray();
+    const hasH = lineNodes.some((node) => {
+      const el = $(node);
+      const y1 = Number.parseFloat(el.attr("y1") ?? "");
+      const y2 = Number.parseFloat(el.attr("y2") ?? "");
+      return Math.abs(y1 - inputCy) < AXIS_INPUT_THRESHOLD && Math.abs(y2 - inputCy) < AXIS_INPUT_THRESHOLD;
+    });
+    const hasV = lineNodes.some((node) => {
+      const el = $(node);
+      const x1 = Number.parseFloat(el.attr("x1") ?? "");
+      const x2 = Number.parseFloat(el.attr("x2") ?? "");
+      return Math.abs(x1 - inputCx) < AXIS_INPUT_THRESHOLD && Math.abs(x2 - inputCx) < AXIS_INPUT_THRESHOLD;
+    });
+    return hasH && hasV;
+  })();
+
   // Scale all bubble DOM nodes to output coordinate space
   svgEl.find("circle[data-trend], circle.bubble, circle.trend-bubble, circle[data-bucket], circle[class*='bucket']")
     .not(".bubble-hit")
@@ -1691,10 +1838,39 @@ export function transformTrendRadarHtmlToStyledSvg(
     });
 
   // Scale normalizedBubbles positions to match (r already normalized in collectNormalizedBubbles)
-  normalizedBubbles.forEach((nb) => {
-    nb.cx = OUTPUT_CENTER + (nb.cx - inputCx) * bubbleScale;
-    nb.cy = OUTPUT_CENTER + (nb.cy - inputCy) * bubbleScale;
-  });
+  // Format C bubbles are already in output space (converted inside collectNormalizedBubbles).
+  const isFormatC = svgEl.attr("data-format-c") === "true";
+  if (!isFormatC) {
+    normalizedBubbles.forEach((nb) => {
+      nb.cx = OUTPUT_CENTER + (nb.cx - inputCx) * bubbleScale;
+      nb.cy = OUTPUT_CENTER + (nb.cy - inputCy) * bubbleScale;
+    });
+  }
+
+  // If the input uses plus-shaped axes, rotate all bubble positions 45° CW in SVG space
+  // (−45° in standard math) around OUTPUT_CENTER so that quadrant alignment matches the
+  // diagonal-axis output: P(NW)→left, W(NE)→top, G(SW)→bottom, L(SE)→right.
+  if (isPlusAxisInput) {
+    const INV_SQRT2 = 1 / Math.SQRT2;
+    svgEl.find("circle[data-trend], circle.bubble, circle.trend-bubble, circle[data-bucket], circle[class*='bucket']")
+      .not(".bubble-hit")
+      .each((_, node) => {
+        const el = $(node);
+        const bx = Number.parseFloat(el.attr("cx") ?? "");
+        const by = Number.parseFloat(el.attr("cy") ?? "");
+        if (!Number.isFinite(bx) || !Number.isFinite(by)) return;
+        const dx = bx - OUTPUT_CENTER;
+        const dy = by - OUTPUT_CENTER;
+        el.attr("cx", String(OUTPUT_CENTER + (dx + dy) * INV_SQRT2));
+        el.attr("cy", String(OUTPUT_CENTER + (-dx + dy) * INV_SQRT2));
+      });
+    normalizedBubbles.forEach((nb) => {
+      const dx = nb.cx - OUTPUT_CENTER;
+      const dy = nb.cy - OUTPUT_CENTER;
+      nb.cx = OUTPUT_CENTER + (dx + dy) * INV_SQRT2;
+      nb.cy = OUTPUT_CENTER + (-dx + dy) * INV_SQRT2;
+    });
+  }
 
   // Scale axis lines
   svgEl.find("line").each((_, node) => {
@@ -1741,8 +1917,45 @@ const greyR =
   Number.parseFloat(svgEl.attr("data-radar-grey-r") ?? "") ||
   meta.frameRadius * 1.12; // fallback (should match your ring function)
 
+  // Convert plus-shaped (horizontal + vertical) axes to diagonal (X-shaped) axes.
+  // Inputs like Pflege2030 use a H/V cross; the output radar expects ±45° diagonals.
+  // Detection: a line is horizontal if both y-coords ≈ cy; vertical if both x-coords ≈ cx.
+  // We need both to be present before converting, so a single stray line is left alone.
+  {
+    const AXIS_THRESHOLD = 12; // px tolerance in output-space (center is at OUTPUT_CENTER)
+    const allLineNodes = svgEl.find("line").toArray();
+
+    const hNode = allLineNodes.find((node) => {
+      const el = $(node);
+      const y1 = Number.parseFloat(el.attr("y1") ?? "");
+      const y2 = Number.parseFloat(el.attr("y2") ?? "");
+      return Math.abs(y1 - cy) < AXIS_THRESHOLD && Math.abs(y2 - cy) < AXIS_THRESHOLD;
+    });
+    const vNode = allLineNodes.find((node) => {
+      const el = $(node);
+      const x1 = Number.parseFloat(el.attr("x1") ?? "");
+      const x2 = Number.parseFloat(el.attr("x2") ?? "");
+      return Math.abs(x1 - cx) < AXIS_THRESHOLD && Math.abs(x2 - cx) < AXIS_THRESHOLD;
+    });
+
+    if (hNode && vNode) {
+      // Use greyR as initial span — the extension loop below will normalize to exact boundary
+      const d = greyR / Math.SQRT2;
+      // Horizontal → 45° diagonal: top-left ↔ bottom-right
+      $(hNode)
+        .attr("x1", String(cx - d)).attr("y1", String(cy - d))
+        .attr("x2", String(cx + d)).attr("y2", String(cy + d))
+        .attr("stroke", "black").removeAttr("class");
+      // Vertical → −45° diagonal: top-right ↔ bottom-left
+      $(vNode)
+        .attr("x1", String(cx + d)).attr("y1", String(cy - d))
+        .attr("x2", String(cx - d)).attr("y2", String(cy + d))
+        .attr("stroke", "black").removeAttr("class");
+    }
+  }
+
   // Expand viewBox so the grey circle (and axes) never get clipped
-const padding = 40; // tweak 20–80 if needed
+const padding = 120; // tweak 20–80 if needed
 const newHalf = greyR + padding;
 
 const minX = cx - newHalf;
@@ -1751,6 +1964,15 @@ const size = newHalf * 2;
 
 svgEl.attr("viewBox", `${minX} ${minY} ${size} ${size}`);
 svgEl.attr("preserveAspectRatio", "xMidYMid meet");
+
+// Normalise grey axis-line strokes so the extension loop below picks them up.
+svgEl.find("line").each((_, node) => {
+  const el = $(node);
+  const stroke = (el.attr("stroke") ?? "").trim().toLowerCase();
+  if (stroke === "#777777" || stroke === "#666666" || stroke === "gray" || stroke === "grey") {
+    el.attr("stroke", "black");
+  }
+});
 
 svgEl.find("line").each((_, node) => {
   const el = $(node);

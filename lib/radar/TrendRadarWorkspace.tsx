@@ -149,6 +149,23 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
   const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
   svgClone.querySelectorAll("parsererror").forEach((node) => node.remove());
 
+  // Expand viewBox to prevent clipping of outer labels and PWLG text on export
+  const currentViewBox = svgClone.getAttribute("viewBox");
+  if (currentViewBox) {
+    const parts = currentViewBox.split(/\s+/).map(Number);
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      const [minX, minY, width, height] = parts;
+      const pad = 120;
+      svgClone.setAttribute(
+        "viewBox",
+        `${minX - pad} ${minY - pad} ${width + pad * 2} ${height + pad * 2}`
+      );
+    }
+  }
+
+  svgClone.removeAttribute("width");
+  svgClone.removeAttribute("height");
+
   svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
 
@@ -281,7 +298,7 @@ export function TrendRadarWorkspace() {
     const parsed = new DOMParser().parseFromString(baseSvgMarkup, "image/svg+xml");
     const svg =
       parsed.documentElement?.tagName.toLowerCase() === "svg"
-        ? (parsed.documentElement as SVGSVGElement)
+        ? (parsed.documentElement as unknown as SVGSVGElement)
         : parsed.querySelector("svg");
 
     if (!svg) {
