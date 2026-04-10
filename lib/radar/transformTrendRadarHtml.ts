@@ -985,7 +985,8 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
   // ── Tunable constant: approximate px width per character at 10px font ──
   const CHAR_WIDTH_PX = 7;
-  const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
+  const maxCharsPerLine = 28;
+  const MAX_DRIFT = Math.PI * 2; // ±90° clamp from original bubble angle
   const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
 
   // ── Collect bubbles and compute initial angles ──
@@ -1050,11 +1051,13 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
   // Dynamic minimum gap: scales down when there are many labels so they can all fit
   const MIN_ANGULAR_GAP = Math.max(
-    3 * (Math.PI / 180),                         // at least 3°
+    10 * (Math.PI / 180),                         // at least 4°
     (Math.PI * 2 / items.length) * 0.6,          // 60% of even spacing
   );
   items.forEach((item) => {
-    item.halfWidth = Math.max(baseAngularHalfWidth, MIN_ANGULAR_GAP / 2);
+    item.halfWidth = item.label.length > maxCharsPerLine
+      ? baseAngularHalfWidth * 2.6
+      : baseAngularHalfWidth * 1.0;
   });
 
   // ── Convert to [0, 2π) and sort by angle ──
@@ -1066,6 +1069,13 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
   // ── Iterative push-apart relaxation ──
   const TWO_PI = Math.PI * 2;
+
+  const drift = (item: (typeof items)[number]) => {
+    let d = item.theta - item.origTheta;
+    if (d > Math.PI) d -= TWO_PI;
+    if (d < -Math.PI) d += TWO_PI;
+    return Math.abs(d);
+  };
 
   const pushApart = (maxPasses: number) => {
     for (let pass = 0; pass < maxPasses; pass++) {
@@ -1081,8 +1091,16 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
         const needed = a.halfWidth + b.halfWidth;
         if (gap < needed) {
           const overlap = needed - gap;
-          a.theta -= overlap / 2;
-          b.theta += overlap / 2;
+          const aAtLimit = drift(a) >= MAX_DRIFT;
+          const bAtLimit = drift(b) >= MAX_DRIFT;
+          if (aAtLimit && !bAtLimit) {
+            b.theta += overlap;
+          } else if (bAtLimit && !aAtLimit) {
+            a.theta -= overlap;
+          } else {
+            a.theta -= overlap / 2;
+            b.theta += overlap / 2;
+          }
           moved = true;
         }
       }
@@ -1094,9 +1112,32 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
       items.sort((a, b) => a.theta - b.theta);
       if (!moved) break;
     }
+
+    // Final check: any pair closer than 85% of combined halfWidths —
+    // the one further from its origTheta is moved to clear the other.
+    items.sort((a, b) => a.theta - b.theta);
+    for (let i = 0; i < items.length; i++) {
+      const j = (i + 1) % items.length;
+      const a = items[i];
+      const b = items[j];
+      let gap = b.theta - a.theta;
+      if (j === 0) gap += TWO_PI;
+      const threshold = (a.halfWidth + b.halfWidth) * 0.85;
+      if (gap < threshold) {
+        if (drift(a) >= drift(b)) {
+          a.theta = b.theta - (a.halfWidth + b.halfWidth);
+        } else {
+          b.theta = a.theta + (a.halfWidth + b.halfWidth);
+        }
+      }
+    }
+    items.forEach((item) => {
+      item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
+    });
+    items.sort((a, b) => a.theta - b.theta);
   };
 
-  pushApart(50);
+  pushApart(150);
 
   // ── Clamp: each label must stay within ±90° of its original bubble angle ──
   items.forEach((item) => {
@@ -1113,7 +1154,26 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
   // Second push-apart pass to fix overlaps re-introduced by clamping
   items.sort((a, b) => a.theta - b.theta);
-  pushApart(20);
+  pushApart(80);
+
+  // Fine-grained adjacency pass: resolve any remaining overlap with a 0.05 rad tolerance
+  items.sort((a, b) => a.theta - b.theta);
+  for (let i = 0; i < items.length; i++) {
+    const j = (i + 1) % items.length;
+    const a = items[i];
+    const b = items[j];
+    let gap = b.theta - a.theta;
+    if (j === 0) gap += TWO_PI;
+    const needed = a.halfWidth + b.halfWidth + 0.05;
+    if (gap < needed) {
+      const overlap = needed - gap;
+      a.theta -= overlap / 2;
+      b.theta += overlap / 2;
+    }
+  }
+  items.forEach((item) => {
+    item.theta = ((item.theta % TWO_PI) + TWO_PI) % TWO_PI;
+  });
 
   // ── Convert back to [-π, π] for rendering ──
   items.forEach((item) => {
@@ -1142,19 +1202,35 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
     text.attr("font-family", "Open Sans, sans-serif");
-    text.attr("font-size", "10");
+    text.attr("font-size", "11");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
     }
     text.attr("data-trend", item.trendKey);
     text.attr("data-label-theta", String(theta));
-    const estimatedRadialLength = item.label.length * CHAR_WIDTH_PX;
-    if (estimatedRadialLength > maxRadial) {
-      text.attr("textLength", String(maxRadial));
-      text.attr("lengthAdjust", "spacingAndGlyphs");
+    if (item.label.length > maxCharsPerLine) {
+      const mid = Math.floor(item.label.length / 2);
+      let splitAt = -1;
+      for (let d = 0; d <= mid; d++) {
+        if (item.label[mid - d] === " ") { splitAt = mid - d; break; }
+        if (item.label[mid + d] === " ") { splitAt = mid + d; break; }
+      }
+      if (splitAt > 0) {
+        const line1 = item.label.slice(0, splitAt);
+        const line2 = item.label.slice(splitAt + 1);
+        text.text(line1);
+        const tspan = $("<tspan></tspan>");
+        tspan.attr("x", String(x));
+        tspan.attr("dy", "1.1em");
+        tspan.text(line2);
+        text.append(tspan);
+      } else {
+        text.text(item.label);
+      }
+    } else {
+      text.text(item.label);
     }
-    text.text(item.label);
     group.append(text);
   });
 
@@ -1562,7 +1638,7 @@ function replaceBubbleCirclesWithImages(
   const SCALE_BIG = 1.78;
   const SCALE_MED = 1.48;
   const SCALE_TIGHT = 1.34;
-  const HIT_SCALE = 2.03; // SCALE_BIG (1.78) + 0.25 — must clear the largest image overlay
+  const HIT_SCALE = 1.2; // SCALE_BIG (1.78) + 0.25 — must clear the largest image overlay
   const bubbleNodes = normalizedBubbles.map((nb) => {
     const bubble = nb.node;
     return {
