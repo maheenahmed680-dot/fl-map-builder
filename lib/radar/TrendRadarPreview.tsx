@@ -38,8 +38,31 @@ function toBubbleSelectionKey(clusterId: string | null, trend: string | null) {
 
 function getSelectableNode(target: Element | null) {
   return target?.closest(
-    "circle.bubble, circle.trend-bubble, circle[data-trend], image.bubble, image.trend-bubble, #radar-labels-outer text",
+    [
+      "circle.bubble",
+      "circle.trend-bubble",
+      "circle[data-trend]",
+      "image.bubble",
+      "image.trend-bubble",
+      "#radar-labels-outer text",
+      "#radar-connectors path[data-trend]",
+      "#radar-connectors path[data-cluster-id]",
+      "#radar-connectors line[data-trend]",
+      "#radar-connectors line[data-cluster-id]",
+      "#radar-connectors polyline[data-trend]",
+      "#radar-connectors polyline[data-cluster-id]",
+    ].join(", "),
   ) ?? null;
+}
+
+/** Allow connector paths/lines to receive pointer events despite their parent group
+ *  being created with pointer-events="none". Must be called each time innerHTML is set. */
+function enableConnectorInteractivity(svg: Element) {
+  svg.querySelectorAll<SVGElement>(
+    "#radar-connectors path[data-trend], #radar-connectors path[data-cluster-id], " +
+    "#radar-connectors line[data-trend], #radar-connectors line[data-cluster-id], " +
+    "#radar-connectors polyline[data-trend], #radar-connectors polyline[data-cluster-id]",
+  ).forEach((el) => el.setAttribute("pointer-events", "stroke"));
 }
 
 function parseSelectedBubbleKey(selectedBubbleKey: string | null) {
@@ -140,6 +163,8 @@ function applyLabelPosition(
   label.setAttribute("y", String(y));
   label.setAttribute("text-anchor", anchor);
   label.setAttribute("transform", `rotate(${finalRotation} ${x} ${y})`);
+  const tspan = label.querySelector('tspan');
+  if (tspan) tspan.setAttribute('x', String(x));
 }
 
 function getQuadrant(angle: number): number {
@@ -282,7 +307,11 @@ export function TrendRadarPreview({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const svgContainerRef = useCallback((node: HTMLDivElement | null) => {
     previewSvgRef.current = node;
-    if (node) node.innerHTML = svgMarkup;
+    if (node) {
+      node.innerHTML = svgMarkup;
+      const svg = node.querySelector("svg");
+      if (svg) enableConnectorInteractivity(svg);
+    }
   }, []);
 
   const displayFont = { fontFamily: "Montserrat, Open Sans, Arial, sans-serif" } as const;
@@ -294,7 +323,11 @@ export function TrendRadarPreview({
     prevSvgMarkupRef.current = svgMarkup;
 
     // svgMarkup changed — replace the SVG DOM manually (no dangerouslySetInnerHTML)
-    if (previewSvgRef.current) previewSvgRef.current.innerHTML = svgMarkup;
+    if (previewSvgRef.current) {
+      previewSvgRef.current.innerHTML = svgMarkup;
+      const svg = previewSvgRef.current.querySelector("svg");
+      if (svg) enableConnectorInteractivity(svg);
+    }
 
     setZoom(1);
   setTranslateX(0);
@@ -328,6 +361,9 @@ export function TrendRadarPreview({
   useEffect(() => {
     const svg = previewSvgRef.current?.querySelector("svg");
     if (!svg) return;
+
+    // Ensure connector paths are interactive after every SVG replacement
+    enableConnectorInteractivity(svg);
 
     // 1. Restore selection highlight
     const { clusterId, trend } = appliedSelectionRef.current;
