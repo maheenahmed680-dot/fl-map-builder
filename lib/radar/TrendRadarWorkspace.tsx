@@ -155,7 +155,7 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
     const parts = currentViewBox.split(/\s+/).map(Number);
     if (parts.length === 4 && parts.every(Number.isFinite)) {
       const [minX, minY, width, height] = parts;
-      const pad = 120;
+      const pad = 200;
       svgClone.setAttribute(
         "viewBox",
         `${minX - pad} ${minY - pad} ${width + pad * 2} ${height + pad * 2}`
@@ -163,14 +163,29 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
     }
   }
 
+  svgClone.querySelectorAll("text[font-size]").forEach(el => {
+    const current = parseFloat(el.getAttribute("font-size") ?? "10");
+    el.setAttribute("font-size", String(current * 1.2));
+  });
+
   svgClone.removeAttribute("width");
   svgClone.removeAttribute("height");
 
   svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  let defs = svgClone.querySelector("defs");
+if (!defs) { defs = document.createElementNS("http://www.w3.org/2000/svg", "defs"); svgClone.prepend(defs); }
+const fontResp = await fetch("https://fonts.gstatic.com/s/opensans/v40/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsiH0C4n.woff2");
+if (fontResp.ok) {
+  const b64 = await fontResp.blob().then(b => new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r((fr.result as string).split(",")[1]); fr.readAsDataURL(b); }));
+  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = `@font-face{font-family:'Open Sans';font-style:normal;font-weight:400;src:url('data:font/woff2;base64,${b64}')format('woff2')}`;
+  defs.prepend(style);
+}
 
   const assetCache = new Map<string, string>();
-  for (const image of Array.from(svgClone.querySelectorAll("image"))) {
+  const svgTextCache = new Map<string, string>();
+  for (const [imgIdx, image] of Array.from(svgClone.querySelectorAll("image")).entries()) {
     const href = image.getAttribute("href")?.trim() ?? null;
     const xlinkHref =
       image.getAttribute("xlink:href")?.trim() ??
@@ -184,13 +199,86 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
 
     if (!assetPath) continue;
 
+    // Inline SVG assets as <g> elements; fall back to base64 for non-SVG or on error.
+    if (assetPath.toLowerCase().endsWith(".svg")) {
+      try {
+        let svgText = svgTextCache.get(assetPath);
+        if (!svgText) {
+          const response = await fetch(new URL(assetPath, window.location.origin).toString());
+          if (!response.ok) throw new Error(`${response.status}`);
+          svgText = await response.text();
+          svgTextCache.set(assetPath, svgText);
+        }
+
+        const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
+        const innerSvg = parsed.querySelector("svg");
+        if (!innerSvg) throw new Error("no <svg> in fetched file");
+
+        // Build a <g> that positions/sizes the inline SVG to match the <image>'s box
+        const ix = Number.parseFloat(image.getAttribute("x") ?? "0");
+        const iy = Number.parseFloat(image.getAttribute("y") ?? "0");
+        const iw = Number.parseFloat(image.getAttribute("width") ?? "0");
+        const ih = Number.parseFloat(image.getAttribute("height") ?? "0");
+        const vbRaw = innerSvg.getAttribute("viewBox");
+        const vbParts = vbRaw ? vbRaw.trim().split(/[\s,]+/).map(Number) : null;
+        const [vbX, vbY, vbW, vbH] = (vbParts?.length === 4 && vbParts.every(Number.isFinite))
+          ? vbParts
+          : [0, 0, iw || 1, ih || 1];
+
+        const scaleX = iw > 0 ? iw / vbW : 1;
+        const scaleY = ih > 0 ? ih / vbH : 1;
+        const translateX = ix - vbX * scaleX;
+        const translateY = iy - vbY * scaleY;
+
+        const g = svgClone.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("transform", `translate(${translateX} ${translateY}) scale(${scaleX} ${scaleY})`);
+
+        // Copy data-* and class attributes from the original <image>
+        for (const attr of Array.from(image.attributes)) {
+          if (attr.name.startsWith("data-") || attr.name === "class") {
+            g.setAttribute(attr.name, attr.value);
+          }
+        }
+        const existingTransform = image.getAttribute("transform");
+        if (existingTransform) {
+          g.setAttribute("transform", `${existingTransform} translate(${translateX} ${translateY}) scale(${scaleX} ${scaleY})`);
+        }
+
+        // Prefix all IDs and their references to avoid conflicts when multiple
+        // copies of the same bubble SVG are inlined into the same document.
+        const prefix = `b${imgIdx}-`;
+        let prefixedSvgText = new XMLSerializer().serializeToString(innerSvg);
+        prefixedSvgText = prefixedSvgText.replace(/\bid="([^"]+)"/g, `id="${prefix}$1"`);
+        prefixedSvgText = prefixedSvgText.replace(/\burl\(#([^)]+)\)/g, `url(#${prefix}$1)`);
+        prefixedSvgText = prefixedSvgText.replace(/\bxlink:href="#([^"]+)"/g, `xlink:href="#${prefix}$1"`);
+        const prefixedInnerSvg = new DOMParser()
+          .parseFromString(prefixedSvgText, "image/svg+xml")
+          .querySelector("svg") ?? innerSvg;
+
+        for (const child of Array.from(prefixedInnerSvg.childNodes)) {
+          g.appendChild(svgClone.ownerDocument.importNode(child, true));
+        }
+
+        image.replaceWith(g);
+        continue;
+      } catch {
+        // Fall through to base64 fallback
+      }
+    }
+
     const dataUrl = await assetPathToDataUrl(assetPath, assetCache);
     image.setAttribute("href", dataUrl);
     image.setAttribute("xlink:href", dataUrl);
     image.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", dataUrl);
   }
 
-  const xml = new XMLSerializer().serializeToString(svgClone);
+  svgClone.querySelectorAll("circle.bubble").forEach(el => el.setAttribute("data-link", "https://example.com"));
+  const raw = new XMLSerializer().serializeToString(svgClone);
+const xml = raw
+  .replace(/></g, ">\n<")
+  .replace(/(<circle[^>]*)(>)/g, (_, attrs, close) =>
+    attrs.replace(/(\s[a-zA-Z:_-]+=)/g, "\n  $1") + close
+  );
   const stats: SvgExportStats = {
     hrefRootRelativeCount: (xml.match(/\shref="\/[^"]*"/g) ?? []).length,
     xlinkHrefRootRelativeCount: (xml.match(/\sxlink:href="\/[^"]*"/g) ?? []).length,
@@ -215,6 +303,7 @@ export function TrendRadarWorkspace() {
   const [rawHtml, setRawHtml] = useState("");
   const [fileName, setFileName] = useState("");
   const [baseSvgMarkup, setBaseSvgMarkup] = useState("");
+  const [previewKey, setPreviewKey] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [baseBubbleIndexByKey, setBaseBubbleIndexByKey] = useState<Record<BubbleSelectionKey, BubbleMeta>>({});
   const [selectedBubbleKey, setSelectedBubbleKey] = useState<BubbleSelectionKey | null>(null);
@@ -279,6 +368,7 @@ export function TrendRadarWorkspace() {
       if (!active) return;
 
       setBaseSvgMarkup(result.svg);
+      setPreviewKey((k) => k + 1);
       setWarnings(result.warnings);
     }
 
@@ -429,6 +519,7 @@ export function TrendRadarWorkspace() {
       }
     >
       <TrendRadarPreview
+        key={previewKey}
         onBubbleSelect={setSelectedBubbleKey}
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
         selectedBubbleKey={selectedBubbleKey}

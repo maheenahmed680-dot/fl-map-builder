@@ -591,7 +591,7 @@ function ensureBackgroundRings(svg: Cheerio<NodeHandle>, meta: Phase1Meta) {
 const tealR3 = meta.frameRadius;        // normalized: teal outer boundary = frame
 const tealR2 = meta.frameRadius * 0.74; // from reference proportions
 const tealR1 = meta.frameRadius * 0.47; // from reference proportions
-const greyR  = meta.frameRadius * 1.45; // wider label band like design
+const greyR  = meta.frameRadius * 1.46; // wider label band like design
 
   svg.attr("overflow", "visible");
   const style = svg.attr("style") ?? "";
@@ -986,7 +986,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   // ── Tunable constant: approximate px width per character at 10px font ──
   const CHAR_WIDTH_PX = 7;
   const maxCharsPerLine = 28;
-  const MAX_DRIFT = Math.PI * 2; // ±90° clamp from original bubble angle
+  const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
   const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
 
   // ── Collect bubbles and compute initial angles ──
@@ -1056,8 +1056,8 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   );
   items.forEach((item) => {
     item.halfWidth = item.label.length > maxCharsPerLine
-      ? baseAngularHalfWidth * 2.6
-      : baseAngularHalfWidth * 1.0;
+      ? baseAngularHalfWidth * 2.5
+      : baseAngularHalfWidth * 2;
   });
 
   // ── Convert to [0, 2π) and sort by angle ──
@@ -1201,8 +1201,8 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("y", String(y));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
-    text.attr("font-family", "Open Sans, sans-serif");
-    text.attr("font-size", "11");
+    text.attr("font-family", "Helvetica, Arial, sans-serif");
+    text.attr("font-size", "10");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
