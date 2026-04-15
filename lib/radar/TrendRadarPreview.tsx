@@ -294,7 +294,6 @@ export function TrendRadarPreview({
   const [isDragging, setIsDragging] = useState(false);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [labelOverrides, setLabelOverrides] = useState<Record<string, number>>({});
-  const [overrideHistory, setOverrideHistory] = useState<Record<string, number>[]>([]);
 
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const isDraggingRef = useRef(false);
@@ -546,10 +545,7 @@ export function TrendRadarPreview({
       const slot = slots[slotIndex];
       if (!slot) return;
 
-      setLabelOverrides((prev) => {
-  setOverrideHistory((h) => [...h, prev]);
-  return { ...prev, [selectedBubbleKey]: slot.angle };
-});
+      setLabelOverrides((prev) => ({ ...prev, [selectedBubbleKey]: slot.angle }));
       setSlots([]);
       onBubbleSelect(null);
     },
@@ -624,14 +620,6 @@ export function TrendRadarPreview({
     });
   }
 
-  function handleUndo() {
-  setOverrideHistory((h) => {
-    const prev = h[h.length - 1];
-    if (prev !== undefined) setLabelOverrides(prev);
-    return h.slice(0, -1);
-  });
-}
-  
   function handleClick(event: React.MouseEvent<HTMLDivElement>) {
     if (suppressClickRef.current) {
       event.preventDefault();
@@ -919,19 +907,6 @@ export function TrendRadarPreview({
               >
                 <span className="text-[18px] leading-none text-[#222222]">↺</span>
               </button>
-              {overrideHistory.length > 0 && (
-  <button
-    type="button"
-    onClick={(event) => {
-      event.stopPropagation();
-      handleUndo();
-    }}
-    onMouseDown={(event) => event.stopPropagation()}
-    aria-label="Undo"
-  >
-    <span className="text-[18px] leading-none text-[#222222]">↩</span>
-  </button>
-)}
             </div>
 
             <div className="trend-preview-zoomShell">
