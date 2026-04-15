@@ -1201,8 +1201,9 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("y", String(y));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
-    text.attr("font-family", "Helvetica, Arial, sans-serif");
+    text.attr("font-family", "Open Sans, Arial, sans-serif");
     text.attr("font-size", "10");
+    text.attr("font-weight", "400");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
