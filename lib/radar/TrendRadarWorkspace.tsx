@@ -170,6 +170,8 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
 
   svgClone.removeAttribute("width");
   svgClone.removeAttribute("height");
+  svgClone.setAttribute("width", "737pt");
+  svgClone.setAttribute("height", "737pt");
 
   svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   svgClone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");

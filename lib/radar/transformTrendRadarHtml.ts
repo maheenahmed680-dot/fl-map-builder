@@ -985,7 +985,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
   // ── Tunable constant: approximate px width per character at 10px font ──
   const CHAR_WIDTH_PX = 7;
-  const maxCharsPerLine = 28;
+  const maxCharsPerLine = 20;
   const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
   const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
 
@@ -1047,7 +1047,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   // is determined by the FONT HEIGHT (not text length). Text length extends
   // radially, not along the circumference.
   const labelRadius = R_tealOuter + LABEL_OFFSET;
-  const FONT_HEIGHT_PX = 14; // 10px font + line spacing
+  const FONT_HEIGHT_PX = 17.1; // 10px font + line spacing
   const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
   // Dynamic minimum gap: scales down when there are many labels so they can all fit
   const MIN_ANGULAR_GAP = Math.max(
@@ -1202,7 +1202,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
     text.attr("font-family", "Open Sans");
-    text.attr("font-size", "10");
+    text.attr("font-size", "12.2");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
