@@ -713,9 +713,9 @@ function ensurePwlgLabelsAndPercents(
     labelText.attr("y", String(labelY));
     labelText.attr("text-anchor", entry.anchor);
     labelText.attr("dominant-baseline", "middle");
-    labelText.attr("font-family", "'Open Sans', sans-serif");
+    labelText.attr("font-family", "Montserrat");
     labelText.attr("font-size", "24");
-    labelText.attr("font-weight", "500");
+    labelText.attr("font-weight", "600");
     labelText.attr("fill", "#111");
     if (isRotated) {
       labelText.attr("transform", `rotate(${entry.rotation}, ${labelX}, ${labelY})`);
@@ -728,7 +728,7 @@ function ensurePwlgLabelsAndPercents(
     percentText.attr("y", String(percentY));
     percentText.attr("text-anchor", entry.anchor);
     percentText.attr("dominant-baseline", "middle");
-    percentText.attr("font-family", "'Open Sans', sans-serif");
+    percentText.attr("font-family", "Montserrat");
     percentText.attr("font-size", "24");
     percentText.attr("font-weight", "700");
     percentText.attr("fill", "url(#fl-tealGradient)");
@@ -1201,7 +1201,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("y", String(y));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
-    text.attr("font-family", "'Open Sans', sans-serif");
+    text.attr("font-family", "Open Sans");
     text.attr("font-size", "10");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
