@@ -167,6 +167,18 @@ async function buildDownloadableSvgMarkup(svgElement: SVGSVGElement) {
     const current = parseFloat(el.getAttribute("font-size") ?? "10");
     el.setAttribute("font-size", String(current * 1.2));
   });
+const vbForStroke = svgClone.getAttribute("viewBox");
+const vbPartsForStroke = vbForStroke ? vbForStroke.split(/\s+/).map(Number) : null;
+const svgUnitsToPt = (vbPartsForStroke?.length === 4 && vbPartsForStroke.every(Number.isFinite))
+  ? vbPartsForStroke[2] / 737
+  : 1.9;
+const targetStrokePt = 0.10;
+svgClone.querySelectorAll("#radar-connectors path").forEach(el => {
+  el.setAttribute("stroke-width", String(targetStrokePt * svgUnitsToPt));
+});
+svgClone.querySelectorAll("#radar-connectors path").forEach(el => {
+  el.removeAttribute("opacity");
+});
 
   svgClone.removeAttribute("width");
   svgClone.removeAttribute("height");
