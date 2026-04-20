@@ -713,9 +713,9 @@ function ensurePwlgLabelsAndPercents(
     labelText.attr("y", String(labelY));
     labelText.attr("text-anchor", entry.anchor);
     labelText.attr("dominant-baseline", "middle");
-    labelText.attr("font-family", "Montserrat, sans-serif");
+    labelText.attr("font-family", "Montserrat");
     labelText.attr("font-size", "24");
-    labelText.attr("font-weight", "500");
+    labelText.attr("font-weight", "600");
     labelText.attr("fill", "#111");
     if (isRotated) {
       labelText.attr("transform", `rotate(${entry.rotation}, ${labelX}, ${labelY})`);
@@ -728,7 +728,7 @@ function ensurePwlgLabelsAndPercents(
     percentText.attr("y", String(percentY));
     percentText.attr("text-anchor", entry.anchor);
     percentText.attr("dominant-baseline", "middle");
-    percentText.attr("font-family", "Montserrat, sans-serif");
+    percentText.attr("font-family", "Montserrat");
     percentText.attr("font-size", "24");
     percentText.attr("font-weight", "700");
     percentText.attr("fill", "url(#fl-tealGradient)");
@@ -985,7 +985,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
 
   // ── Tunable constant: approximate px width per character at 10px font ──
   const CHAR_WIDTH_PX = 7;
-  const maxCharsPerLine = 28;
+  const maxCharsPerLine = 20;
   const MAX_DRIFT = Math.PI / 2; // ±90° clamp from original bubble angle
   const LABEL_OFFSET = 8; // px gap between outermost teal circle and label text
 
@@ -1047,7 +1047,7 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
   // is determined by the FONT HEIGHT (not text length). Text length extends
   // radially, not along the circumference.
   const labelRadius = R_tealOuter + LABEL_OFFSET;
-  const FONT_HEIGHT_PX = 14; // 10px font + line spacing
+  const FONT_HEIGHT_PX = 17.1; // 10px font + line spacing
   const baseAngularHalfWidth = (FONT_HEIGHT_PX / labelRadius) / 2;
   // Dynamic minimum gap: scales down when there are many labels so they can all fit
   const MIN_ANGULAR_GAP = Math.max(
@@ -1201,8 +1201,8 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
     text.attr("y", String(y));
     text.attr("text-anchor", anchor);
     text.attr("dominant-baseline", "middle");
-    text.attr("font-family", "Helvetica, Arial, sans-serif");
-    text.attr("font-size", "10");
+    text.attr("font-family", "Open Sans");
+    text.attr("font-size", "12.2");
     text.attr("transform", `rotate(${finalRotation} ${x} ${y})`);
     if (item.clusterId) {
       text.attr("data-cluster-id", item.clusterId);
@@ -1216,21 +1216,31 @@ const maxRadial = Math.max(0, (BAND_OUTER - BAND_PADDING) - (R_tealOuter + 8));
         if (item.label[mid - d] === " ") { splitAt = mid - d; break; }
         if (item.label[mid + d] === " ") { splitAt = mid + d; break; }
       }
-      if (splitAt > 0) {
-        const line1 = item.label.slice(0, splitAt);
-        const line2 = item.label.slice(splitAt + 1);
-        text.text(line1);
-        const tspan = $("<tspan></tspan>");
-        tspan.attr("x", String(x));
-        tspan.attr("dy", "1.1em");
-        tspan.text(line2);
-        text.append(tspan);
-      } else {
-        text.text(item.label);
-      }
-    } else {
-      text.text(item.label);
-    }
+    if (splitAt > 0 && item.label.slice(0, splitAt).length <= maxCharsPerLine) {
+  const line1 = item.label.slice(0, splitAt);
+  const line2 = item.label.slice(splitAt + 1);
+  text.text(line1);
+  const tspan = $("<tspan></tspan>");
+  tspan.attr("x", String(x));
+  tspan.attr("dy", "1.1em");
+  tspan.text(line2);
+  text.append(tspan);
+} else if (item.label.length > maxCharsPerLine) {
+  const mid = Math.floor(item.label.length / 2);
+  const line1 = item.label.slice(0, mid) + "-";
+  const line2 = item.label.slice(mid);
+  text.text(line1);
+  const tspan = $("<tspan></tspan>");
+  tspan.attr("x", String(x));
+  tspan.attr("dy", "1.1em");
+  tspan.text(line2);
+  text.append(tspan);
+} else {
+  text.text(item.label);
+}
+} else {
+  text.text(item.label);
+}
     group.append(text);
   });
 
@@ -1349,8 +1359,9 @@ function drawStraightBubbleLabelConnectors(
     ? domHitCircles.map((node) => {
         const bubble = $(node);
         const bx = Number.parseFloat(bubble.attr("cx") ?? "");
-        const by = Number.parseFloat(bubble.attr("cy") ?? "");
-        if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
+const by = Number.parseFloat(bubble.attr("cy") ?? "");
+const br = Number.parseFloat(bubble.attr("r") ?? "0");
+if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
 
         const clusterId = (bubble.attr("data-cluster-id") ?? bubble.attr("data-cluster") ?? "").trim();
         const trend = (bubble.attr("data-trend") ?? "").trim();
@@ -1365,8 +1376,8 @@ function drawStraightBubbleLabelConnectors(
         const quadrant = getConnectorQuadrantInfo(theta);
 
         return {
-          bx,
-          by,
+          bx: bx + (Math.cos(Math.atan2(ly - by, lx - bx)) * br),
+          by: by + (Math.sin(Math.atan2(ly - by, lx - bx)) * br),
           lx,
           ly,
           theta,
@@ -1398,9 +1409,10 @@ function drawStraightBubbleLabelConnectors(
             return typeFromFill ? getConnectorStrokeFromType(typeFromFill) : "#999";
           })();
 
+        const bAngle = Math.atan2(ly - bubble.cy, lx - bubble.cx);
         return {
-          bx: bubble.cx,
-          by: bubble.cy,
+          bx: bubble.cx + Math.cos(bAngle) * bubble.r,
+          by: bubble.cy + Math.sin(bAngle) * bubble.r,
           lx,
           ly,
           theta,
@@ -1438,22 +1450,21 @@ function drawStraightBubbleLabelConnectors(
     items.forEach((item, index) => {
       const offset = (index - (items.length - 1) / 2) * laneStep;
       const thetaLabel = Math.atan2(item.ly - cyRadar, item.lx - cxRadar);
-      const vx = Math.cos(thetaLabel);
-      const vy = Math.sin(thetaLabel);
-      const tx = -vy;
-      const ty = vx;
+const vx = Math.cos(thetaLabel);
+const vy = Math.sin(thetaLabel);
+const tx = -vy;
+const ty = vx;
 
-      // Connector endpoint: intersection with outermost teal circle
-      const p3x = cxRadar + R_tealOuter * vx;
-      const p3y = cyRadar + R_tealOuter * vy;
+// Connector endpoint: teal ring edge toward label direction
+const p3x = cxRadar + R_tealOuter * vx;
+const p3y = cyRadar + R_tealOuter * vy;
 
-      const distance = Math.hypot(p3x - item.bx, p3y - item.by);
-      const c1 = Math.max(30, Math.min(160, distance * 0.22));
-      const c2 = Math.max(40, Math.min(190, distance * 0.32));
-      const p1x = item.bx + vx * c1 + tx * offset;
-      const p1y = item.by + vy * c1 + ty * offset;
-      const p2x = p3x - vx * c2 + tx * (offset * 0.35);
-      const p2y = p3y - vy * c2 + ty * (offset * 0.35);
+    const distance = Math.hypot(p3x - item.bx, p3y - item.by);
+const c2 = Math.max(20, Math.min(80, distance * 0.25));
+const p1x = item.bx;
+const p1y = item.by;
+const p2x = p3x - vx * c2;
+const p2y = p3y - vy * c2;
 
       const path = $("<path></path>");
       path.attr("d", `M ${item.bx} ${item.by} C ${p1x} ${p1y} ${p2x} ${p2y} ${p3x} ${p3y}`);
@@ -1462,7 +1473,7 @@ function drawStraightBubbleLabelConnectors(
       path.attr("fill", "none");
       path.attr("stroke-linecap", "round");
       path.attr("stroke-linejoin", "round");
-      path.attr("opacity", "0.9");
+      path.attr("opacity", "1");
       connectorGroup.append(path);
     });
   });
