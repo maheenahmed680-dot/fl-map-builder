@@ -398,20 +398,18 @@ export function TrendRadarPreview({
 
       const connector = Array.from(
         svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
-      ).find((node) => {
-        const sp = getConnectorStartPoint(node);
-        return sp && Math.abs(sp.x - bx) <= 0.75 && Math.abs(sp.y - by) <= 0.75;
-      });
+      ).find((node) => matchesSelectedNode(node, oc, ot));
       if (!connector) continue;
 
       const vx = Math.cos(theta);
-      const vy = Math.sin(theta);
-      const p3x = cx + R_tealOuter * vx;
-      const p3y = cy + R_tealOuter * vy;
-      const distance = Math.hypot(p3x - bx, p3y - by);
-      const c1 = Math.max(30, Math.min(160, distance * 0.22));
-      const c2 = Math.max(40, Math.min(190, distance * 0.32));
-      connector.setAttribute("d", `M ${bx} ${by} C ${bx + vx * c1} ${by + vy * c1} ${p3x - vx * c2} ${p3y - vy * c2} ${p3x} ${p3y}`);
+const vy = Math.sin(theta);
+const p3x = cx + R_tealOuter * vx;
+const p3y = cy + R_tealOuter * vy;
+const distance = Math.hypot(p3x - bx, p3y - by);
+const c2 = Math.max(20, Math.min(80, distance * 0.25));
+const p2x = p3x - vx * c2;
+const p2y = p3y - vy * c2;
+connector.setAttribute("d", `M ${bx} ${by} C ${bx} ${by} ${p2x} ${p2y} ${p3x} ${p3y}`);
     }
   }, [svgMarkup]);
 
@@ -514,28 +512,20 @@ export function TrendRadarPreview({
       const by = Number.parseFloat(bubbleNode.getAttribute("cy") ?? "");
       if (!Number.isFinite(bx) || !Number.isFinite(by)) continue;
 
-      const connectorNodes = Array.from(
+      const connector = Array.from(
         svg.querySelectorAll<SVGElement>("#radar-connectors path, #radar-connectors line, #radar-connectors polyline"),
-      );
-      const connector = connectorNodes.find((node) => {
-        const startPoint = getConnectorStartPoint(node);
-        if (!startPoint) return false;
-        return Math.abs(startPoint.x - bx) <= 0.75 && Math.abs(startPoint.y - by) <= 0.75;
-      });
+      ).find((node) => matchesSelectedNode(node, clusterId, trend));
       if (!connector) continue;
 
-      const vx = Math.cos(theta);
-      const vy = Math.sin(theta);
-      const p3x = cx + R_tealOuter * vx;
-      const p3y = cy + R_tealOuter * vy;
-      const distance = Math.hypot(p3x - bx, p3y - by);
-      const c1 = Math.max(30, Math.min(160, distance * 0.22));
-      const c2 = Math.max(40, Math.min(190, distance * 0.32));
-      const p1x = bx + vx * c1;
-      const p1y = by + vy * c1;
-      const p2x = p3x - vx * c2;
-      const p2y = p3y - vy * c2;
-      connector.setAttribute("d", `M ${bx} ${by} C ${p1x} ${p1y} ${p2x} ${p2y} ${p3x} ${p3y}`);
+    const vx = Math.cos(theta);
+const vy = Math.sin(theta);
+const p3x = cx + R_tealOuter * vx;
+const p3y = cy + R_tealOuter * vy;
+const distance = Math.hypot(p3x - bx, p3y - by);
+const c2 = Math.max(20, Math.min(80, distance * 0.25));
+const p2x = p3x - vx * c2;
+const p2y = p3y - vy * c2;
+connector.setAttribute("d", `M ${bx} ${by} C ${bx} ${by} ${p2x} ${p2y} ${p3x} ${p3y}`);
     }
   }, [labelOverrides, svgMarkup]);
 
