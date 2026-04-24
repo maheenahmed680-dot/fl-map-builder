@@ -1385,6 +1385,8 @@ if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
           quadrantId: quadrant.id,
           anchor: (label.attr("text-anchor") ?? "").trim(),
           stroke: getConnectorStrokeForBubble(bubble),
+          trend,
+          clusterId,
         };
       })
     : normalizedBubbles.map((bubble) => {
@@ -1420,6 +1422,8 @@ if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
           quadrantId: quadrant.id,
           anchor: (label.attr("text-anchor") ?? "").trim(),
           stroke: fallbackStroke,
+          trend: bubble.label?.replace(/\s+/g, " ").trim() ?? "",
+          clusterId: bubble.clusterId ?? "",
         };
       }))
     .filter(
@@ -1433,6 +1437,8 @@ if (!Number.isFinite(bx) || !Number.isFinite(by)) return null;
         quadrantId: number;
         anchor: string;
         stroke: string;
+        trend: string;
+        clusterId: string;
       } => Boolean(item),
     );
 
@@ -1474,6 +1480,10 @@ const p2y = p3y - vy * c2;
       path.attr("stroke-linecap", "round");
       path.attr("stroke-linejoin", "round");
       path.attr("opacity", "1");
+      if (item.trend) path.attr("data-trend", item.trend);
+      if (item.clusterId) path.attr("data-cluster-id", item.clusterId);
+      path.attr("data-bubble-cx", String(item.bx));
+      path.attr("data-bubble-cy", String(item.by));
       connectorGroup.append(path);
     });
   });
